@@ -10,10 +10,16 @@ main = do
         bs = encode sds
         bsLE = encodeLE sds
     defaultMain
-        [ bench "binary" $ nf (asVector binary) bs
-        , bench "cereal" $ nf (asVector cereal) bs
-        , bench "simple" $ nf (asVector simple) bs
-        , bench "simpleLE" $ nf (asVector simpleLE) bsLE
+        [ bgroup "encode"
+            [ bench "encode" $ whnf encode sds
+            , bench "simpleEncode" $ whnf simpleEncode sds
+            ]
+        , bgroup "decode"
+            [ bench "binary" $ nf (asVector binary) bs
+            , bench "cereal" $ nf (asVector cereal) bs
+            , bench "simple" $ nf (asVector simple) bs
+            , bench "simpleLE" $ nf (asVector simpleLE) bsLE
+            ]
         ]
 
 asVector :: (ByteString -> Maybe (V.Vector SomeData))

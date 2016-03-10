@@ -26,3 +26,7 @@ main = do
         test "cereal" cereal
         test "simple" simple
         test' encodeLE "simpleLE" simpleLE
+
+        prop "simpleEncode" $ \list ->
+            let v = V.fromList list
+             in simpleEncode v `shouldBe` encodeLE v
