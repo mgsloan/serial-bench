@@ -13,14 +13,16 @@ instance Arbitrary SomeData where
 
 main :: IO ()
 main = do
-    let test name func =
+    let test' enc name func =
             prop name $ \list ->
                 let v = V.fromList list
-                    bs = encode v
+                    bs = enc v
                     mv = func bs
                  in mv `shouldBe` Just v
+        test = test' encode
 
     hspec $ do
         test "binary" binary
         test "cereal" cereal
         test "simple" simple
+        test' encodeLE "simpleLE" simpleLE

@@ -1,10 +1,13 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE CPP #-}
 module Lib
     ( SomeData (..)
     , binary
     , cereal
     , simple
     , encode
+    , encodeLE
+    , simpleLE
     ) where
 
 import Data.Int
@@ -25,6 +28,9 @@ import Control.Monad.ST
 import Control.DeepSeq
 import qualified Data.ByteString.Unsafe as SU
 import Data.Bits ((.|.), shiftL)
+import Data.ByteString.Internal (ByteString (PS), accursedUnutterablePerformIO)
+import Foreign.ForeignPtr (withForeignPtr)
+import Foreign.Storable (peekByteOff)
 
 data SomeData = SomeData !Int64 !Int64 !Int64
     deriving (Eq, Show)
@@ -59,6 +65,17 @@ encode v = L.toStrict
         = Builder.int64BE x
        <> Builder.int64BE y
        <> Builder.int64BE z
+
+encodeLE :: V.Vector v SomeData => v SomeData -> ByteString
+encodeLE v = L.toStrict
+         $ Builder.toLazyByteString
+         $ Builder.int64LE (fromIntegral $ V.length v)
+        <> V.foldr (\sd b -> go sd <> b) mempty v
+  where
+    go (SomeData x y z)
+        = Builder.int64LE x
+       <> Builder.int64LE y
+       <> Builder.int64LE z
 
 binary
     :: B.Binary (v SomeData)
@@ -113,3 +130,42 @@ word64be = \s ->
               (fromIntegral (s `SU.unsafeIndex` 6) `shiftL`  8) .|.
               (fromIntegral (s `SU.unsafeIndex` 7) )
 {-# INLINE word64be #-}
+
+simpleLE
+    :: V.Vector v SomeData
+    => ByteString
+    -> Maybe (v SomeData)
+simpleLE bs0 = runST $
+    readInt64 bs0 $ \bs1 len -> do
+        mv <- MV.new len
+        let loop idx bs
+                | idx >= len = Just <$> V.unsafeFreeze mv
+                | otherwise =
+                    readInt64 bs  $ \bsX x ->
+                    readInt64 bsX $ \bsY y ->
+                    readInt64 bsY $ \bsZ z -> do
+                        MV.unsafeWrite mv idx (SomeData x y z)
+                        loop (idx + 1) bsZ
+        loop 0 bs1
+  where
+    readInt64 bs f
+        | S.length bs < 8 = return Nothing
+        | otherwise = f
+            (SU.unsafeDrop 8 bs)
+            (fromIntegral $ word64le bs)
+
+word64le :: ByteString -> Word64
+#if 0
+word64le = \s ->
+              (fromIntegral (s `SU.unsafeIndex` 7) `shiftL` 56) .|.
+              (fromIntegral (s `SU.unsafeIndex` 6) `shiftL` 48) .|.
+              (fromIntegral (s `SU.unsafeIndex` 5) `shiftL` 40) .|.
+              (fromIntegral (s `SU.unsafeIndex` 4) `shiftL` 32) .|.
+              (fromIntegral (s `SU.unsafeIndex` 3) `shiftL` 24) .|.
+              (fromIntegral (s `SU.unsafeIndex` 2) `shiftL` 16) .|.
+              (fromIntegral (s `SU.unsafeIndex` 1) `shiftL`  8) .|.
+              (fromIntegral (s `SU.unsafeIndex` 0) )
+#endif
+word64le (PS x s _) =
+    accursedUnutterablePerformIO $ withForeignPtr x $ \p -> peekByteOff p s
+{-# INLINE word64le #-}
