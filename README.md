@@ -1,6 +1,6 @@
 ## serial-bench
 
-[![Build Status](https://travis-ci.org/snoyberg/serial-bench.svg?branch=master)](https://travis-ci.org/snoyberg/serial-bench)
+[![Build Status](https://travis-ci.org/fpco/serial-bench.svg?branch=master)](https://travis-ci.org/fpco/serial-bench)
 
 Ridiculously oversimplified serialization benchmark.
 
