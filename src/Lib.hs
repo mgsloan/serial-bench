@@ -62,8 +62,10 @@ data Codec where
 
 codecs :: [Codec]
 codecs =
-    [ Codec "simpleClass" encodeSimpleClass decodeSimpleClass
-    , Codec "simpleClassEx" encodeSimpleClass decodeSimpleClassEx
+    [ Codec "simplePeek" encodeSimpleRaw decodeSimpleClass
+    , Codec "simplePeekEx" encodeSimpleRaw decodeSimpleClassEx
+    , Codec "simplePoke" encodeSimplePoke decodeSimpleClassEx
+    , Codec "simplePokeRef" encodeSimplePokeRef decodeSimpleClassEx
     , Codec "simpleLE" encodeSimpleLE decodeSimpleLE
     , Codec "simpleBE" encodeSimpleBE decodeSimpleBE
     , Codec "cereal" C.encode decodeCereal
@@ -262,9 +264,25 @@ doublele (PS x s _) =
 {-# INLINE doublele #-}
 -------------------------------------------------------------------
 
--- Some helper types used for both Peek and PeekEx
+-- Some helper types used below
 type Total = Int -- total byte size of the given Ptr
 type Offset = Int -- how far into the given Ptr to look
+
+-- | A more efficient @IORef Int@
+newtype OffsetRef = OffsetRef
+    (Data.Vector.Unboxed.Mutable.MVector RealWorld Offset)
+
+newOffsetRef :: Int -> IO OffsetRef
+newOffsetRef x = OffsetRef <$> MV.replicate 1 x
+{-# INLINE newOffsetRef #-}
+
+readOffsetRef :: OffsetRef -> IO Int
+readOffsetRef (OffsetRef mv) = MV.unsafeRead mv 0
+{-# INLINE readOffsetRef #-}
+
+writeOffsetRef :: OffsetRef -> Int -> IO ()
+writeOffsetRef (OffsetRef mv) x = MV.unsafeWrite mv 0 x
+{-# INLINE writeOffsetRef #-}
 
 -------------------------------------------------------------------
 -- continuation-based Peek implementation
@@ -325,23 +343,6 @@ storablePeek = Peek $ \total ptr offset k ->
 
 -------------------------------------------------------------------
 -- ref/exception-based Peek implementation
-
--- | A more efficient @IORef Int@
-newtype OffsetRef = OffsetRef
-    (Data.Vector.Unboxed.Mutable.MVector RealWorld Offset)
-
-newOffsetRef :: Int -> IO OffsetRef
-newOffsetRef x = OffsetRef <$> MV.replicate 1 x
-{-# INLINE newOffsetRef #-}
-
-readOffsetRef :: OffsetRef -> IO Int
-readOffsetRef (OffsetRef mv) = MV.unsafeRead mv 0
-{-# INLINE readOffsetRef #-}
-
-writeOffsetRef :: OffsetRef -> Int -> IO ()
-writeOffsetRef (OffsetRef mv) x = MV.unsafeWrite mv 0 x
-{-# INLINE writeOffsetRef #-}
-
 data PeekException = PeekException
     deriving (Show, Typeable)
 instance Exception PeekException
@@ -399,6 +400,54 @@ storablePeekEx = PeekEx $ \total ptr offsetRef -> do
 -------------------------------------------------------------------
 
 -------------------------------------------------------------------
+-- Continuation-based Poke implementation
+newtype Poke = Poke
+    { runPoke :: forall byte.
+        Ptr byte
+     -> Offset
+     -> (Offset -> IO ())
+     -> IO ()
+    }
+instance Monoid Poke where
+    mempty = Poke $ \_ offset f -> f offset
+    {-# INLINE mempty #-}
+    mappend (Poke f) (Poke g) = Poke $ \ptr offset0 rest ->
+        f ptr offset0 $ \offset1 ->
+        g ptr offset1 rest
+    {-# INLINE mappend #-}
+
+storablePoke :: Storable a => a -> Poke
+storablePoke x = Poke $ \ptr offset k -> do
+    pokeByteOff ptr offset x
+    k $! offset + sizeOf x
+{-# INLINE storablePoke #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- Reference-based Poke implementation
+newtype PokeRef = PokeRef
+    { runPokeRef :: forall byte.
+        Ptr byte
+     -> OffsetRef
+     -> IO ()
+    }
+instance Monoid PokeRef where
+    mempty = PokeRef $ \_ _ -> return ()
+    {-# INLINE mempty #-}
+    mappend (PokeRef f) (PokeRef g) = PokeRef $ \ptr ref ->
+        f ptr ref *>
+        g ptr ref
+    {-# INLINE mappend #-}
+
+storablePokeRef :: Storable a => a -> PokeRef
+storablePokeRef x = PokeRef $ \ptr ref -> do
+    offset <- readOffsetRef ref
+    pokeByteOff ptr offset x
+    writeOffsetRef ref $! offset + sizeOf x
+{-# INLINE storablePokeRef #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
 
 -- | A Simple serialization typeclass. Includes both @Peek@ and @PeekEx@
 -- implementations, though in a real library we would just choose the faster
@@ -408,9 +457,19 @@ class Simple a where
     default simpleSize :: Storable a => Either Int (a -> Int)
     simpleSize = Left (sizeOf (undefined :: a))
 
-    simplePoke :: Ptr byte -> Int -> a -> IO ()
-    default simplePoke :: Storable a => Ptr byte -> Int -> a -> IO ()
-    simplePoke = pokeByteOff
+    simpleRawPoke :: Ptr byte -> Int -> a -> IO ()
+    default simpleRawPoke :: Storable a => Ptr byte -> Int -> a -> IO ()
+    simpleRawPoke = pokeByteOff
+
+    simplePoke :: a -> Poke
+    default simplePoke :: Storable a => a -> Poke
+    simplePoke = storablePoke
+    {-# INLINE simplePoke #-}
+
+    simplePokeRef :: a -> PokeRef
+    default simplePokeRef :: Storable a => a -> PokeRef
+    simplePokeRef = storablePokeRef
+    {-# INLINE simplePokeRef #-}
 
     simplePeek :: Peek s a
     default simplePeek :: Storable a => Peek s a
@@ -426,10 +485,18 @@ instance Simple Double
 
 instance Simple SomeData where
     simpleSize = Left 17
-    simplePoke p s (SomeData x y z) = do
-        simplePoke p s x
-        simplePoke p (s + 8) y
-        simplePoke p (s + 9) z
+    simpleRawPoke p s (SomeData x y z) = do
+        simpleRawPoke p s x
+        simpleRawPoke p (s + 8) y
+        simpleRawPoke p (s + 9) z
+    simplePoke (SomeData x y z) =
+        simplePoke x <>
+        simplePoke y <>
+        simplePoke z
+    simplePokeRef (SomeData x y z) =
+        simplePokeRef x <>
+        simplePokeRef y <>
+        simplePokeRef z
     simplePeek = SomeData
         <$> simplePeek
         <*> simplePeek
@@ -439,7 +506,9 @@ instance Simple SomeData where
         <*> simplePeekEx
         <*> simplePeekEx
     {-# INLINE simpleSize #-}
+    {-# INLINE simpleRawPoke #-}
     {-# INLINE simplePoke #-}
+    {-# INLINE simplePokeRef #-}
     {-# INLINE simplePeek #-}
     {-# INLINE simplePeekEx #-}
 
@@ -448,8 +517,8 @@ instance Simple a => Simple (Data.Vector.Vector a) where
         case simpleSize of
             Left s -> s * V.length v + 8
             Right f -> V.sum (V.map f v) + 8
-    simplePoke p s v = do
-        simplePoke p s (fromIntegral (V.length v) :: Int64)
+    simpleRawPoke p s v = do
+        simpleRawPoke p s (fromIntegral (V.length v) :: Int64)
         let getSize =
                 case simpleSize of
                     Left x -> const x
@@ -458,9 +527,15 @@ instance Simple a => Simple (Data.Vector.Vector a) where
                 | i >= V.length v = return ()
                 | otherwise = do
                     let x = V.unsafeIndex v i
-                    simplePoke p s' x
+                    simpleRawPoke p s' x
                     loop (i + 1) (s' + getSize x)
         loop 0 (s + 8)
+    simplePoke v =
+        simplePoke (fromIntegral (V.length v) :: Int64) <>
+        foldMap simplePoke v
+    simplePokeRef v =
+        simplePokeRef (fromIntegral (V.length v) :: Int64) <>
+        foldMap simplePokeRef v
     simplePeek = do
         len :: Int64 <- simplePeek
         let len' = fromIntegral len
@@ -484,7 +559,9 @@ instance Simple a => Simple (Data.Vector.Vector a) where
                     loop $! i + 1
         loop 0
     {-# INLINE simpleSize #-}
+    {-# INLINE simpleRawPoke #-}
     {-# INLINE simplePoke #-}
+    {-# INLINE simplePokeRef #-}
     {-# INLINE simplePeek #-}
     {-# INLINE simplePeekEx #-}
 
@@ -494,11 +571,25 @@ instance Simple a => Simple (Data.Vector.Vector a) where
 -- Encode/decode functions based on the Simple class
 
 -- | Allocates exactly the amount of storage space necessary
-encodeSimpleClass :: Simple a => a -> ByteString
-encodeSimpleClass x = unsafeCreate
+encodeSimpleRaw :: Simple a => a -> ByteString
+encodeSimpleRaw x = unsafeCreate
     (either id ($ x) simpleSize)
-    (\p -> simplePoke p 0 x)
-{-# INLINE encodeSimpleClass #-}
+    (\p -> simpleRawPoke p 0 x)
+{-# INLINE encodeSimpleRaw #-}
+
+encodeSimplePoke :: Simple a => a -> ByteString
+encodeSimplePoke x = unsafeCreate
+    (either id ($ x) simpleSize)
+    (\p -> runPoke (simplePoke x) p 0 (\_off -> return ()))
+{-# INLINE encodeSimplePoke #-}
+
+encodeSimplePokeRef :: Simple a => a -> ByteString
+encodeSimplePokeRef x = unsafeCreate
+    (either id ($ x) simpleSize)
+    (\p -> do
+        ref <- newOffsetRef 0
+        runPokeRef (simplePokeRef x) p ref)
+{-# INLINE encodeSimplePokeRef #-}
 
 -- | Decode using the @Peek@ continuation-passing approach
 decodeSimpleClass :: Simple a => ByteString -> Maybe a
