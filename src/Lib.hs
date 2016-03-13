@@ -5,17 +5,27 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE GADTs #-}
 module Lib
     ( SomeData (..)
-    , binary
-    , cereal
-    , simple
-    , encode
-    , encodeLE
-    , simpleLE
-    , simpleEncode
-    , simpleClass
-    , simpleClassEx
+    , Codec (..)
+    , codecs
+
+    , encodeBinary
+    , decodeBinary
+
+    , encodeCereal
+    , decodeCereal
+
+    , encodeSimpleBE
+    , decodeSimpleBE
+
+    , encodeSimpleLE
+    , decodeSimpleLE
+
+    , encodeSimpleClass
+    , decodeSimpleClass
+    , decodeSimpleClassEx
     ) where
 
 import Data.Int
@@ -47,8 +57,26 @@ import Control.Exception (Exception, catch, throwIO)
 import Data.Typeable (Typeable)
 import qualified Data.Vector.Unboxed.Mutable
 import qualified Control.Monad.Fail as Fail
+import Unsafe.Coerce (unsafeCoerce)
 
-data SomeData = SomeData !Int64 !Int64 !Int64
+data Codec where
+    Codec :: NFData binary
+          => String
+          -> (Data.Vector.Vector SomeData -> binary)
+          -> (binary -> Maybe (Data.Vector.Vector SomeData))
+          -> Codec
+
+codecs :: [Codec]
+codecs =
+    [ Codec "binary" encodeBinary decodeBinary
+    , Codec "cereal" encodeCereal decodeCereal
+    , Codec "simpleBE" encodeSimpleBE decodeSimpleBE
+    , Codec "simpleLE" encodeSimpleLE decodeSimpleLE
+    , Codec "simpleClass" encodeSimpleClass decodeSimpleClass
+    , Codec "simpleClassEx" encodeSimpleClass decodeSimpleClassEx
+    ]
+
+data SomeData = SomeData !Int64 !Word8 !Double
     deriving (Eq, Show)
 instance NFData SomeData where
     rnf x = x `seq` ()
@@ -71,60 +99,72 @@ instance C.Serialize SomeData where
     {-# INLINE get #-}
     {-# INLINE put #-}
 
-encode :: V.Vector v SomeData => v SomeData -> ByteString
-encode v = L.toStrict
+encodeSimpleBE :: V.Vector v SomeData => v SomeData -> ByteString
+encodeSimpleBE v = L.toStrict
          $ Builder.toLazyByteString
          $ Builder.int64BE (fromIntegral $ V.length v)
         <> V.foldr (\sd b -> go sd <> b) mempty v
   where
     go (SomeData x y z)
         = Builder.int64BE x
-       <> Builder.int64BE y
-       <> Builder.int64BE z
+       <> Builder.word8 y
+       <> Builder.doubleBE z
 
-encodeLE :: V.Vector v SomeData => v SomeData -> ByteString
-encodeLE v = L.toStrict
+encodeSimpleLE :: V.Vector v SomeData => v SomeData -> ByteString
+encodeSimpleLE v = L.toStrict
          $ Builder.toLazyByteString
          $ Builder.int64LE (fromIntegral $ V.length v)
         <> V.foldr (\sd b -> go sd <> b) mempty v
   where
     go (SomeData x y z)
         = Builder.int64LE x
-       <> Builder.int64LE y
-       <> Builder.int64LE z
+       <> Builder.word8 y
+       <> Builder.doubleLE z
 
-binary
+encodeBinary
     :: B.Binary (v SomeData)
-    => ByteString
+    => v SomeData
+    -> L.ByteString
+encodeBinary = B.encode
+
+decodeBinary
+    :: B.Binary (v SomeData)
+    => L.ByteString
     -> Maybe (v SomeData)
-binary = either
+decodeBinary = either
             (const Nothing)
             (\(lbs, _, x) ->
                 if L.null lbs
                     then Just x
                     else Nothing)
        . B.decodeOrFail
-       . L.fromStrict
 
-cereal
+encodeCereal
+    :: C.Serialize (v SomeData)
+    => v SomeData
+    -> ByteString
+encodeCereal = C.encode
+
+decodeCereal
     :: C.Serialize (v SomeData)
     => ByteString
     -> Maybe (v SomeData)
-cereal = either (const Nothing) Just . C.decode
+decodeCereal = either (const Nothing) Just . C.decode
 
-simple
+decodeSimpleBE
     :: V.Vector v SomeData
     => ByteString
     -> Maybe (v SomeData)
-simple bs0 = runST $
+decodeSimpleBE bs0 = runST $
     readInt64 bs0 $ \bs1 len -> do
-        mv <- MV.new len
+        let len' = fromIntegral len
+        mv <- MV.new len'
         let loop idx bs
-                | idx >= len = Just <$> V.unsafeFreeze mv
+                | idx >= len' = Just <$> V.unsafeFreeze mv
                 | otherwise =
-                    readInt64 bs  $ \bsX x ->
-                    readInt64 bsX $ \bsY y ->
-                    readInt64 bsY $ \bsZ z -> do
+                    readInt64  bs  $ \bsX x ->
+                    readWord8  bsX $ \bsY y ->
+                    readDouble bsY $ \bsZ z -> do
                         MV.unsafeWrite mv idx (SomeData x y z)
                         loop (idx + 1) bsZ
         loop 0 bs1
@@ -133,7 +173,20 @@ simple bs0 = runST $
         | S.length bs < 8 = return Nothing
         | otherwise = f
             (SU.unsafeDrop 8 bs)
-            (fromIntegral $ word64be bs)
+            (fromIntegral $ word64be bs :: Int64)
+
+    readWord8 bs f
+        | S.length bs < 1 = return Nothing
+        | otherwise = f
+            (SU.unsafeDrop 1 bs)
+            (bs `SU.unsafeIndex` 0)
+
+    -- probably not safe enough
+    readDouble bs f
+        | S.length bs < 8 = return Nothing
+        | otherwise = f
+            (SU.unsafeDrop 8 bs)
+            (unsafeCoerce $ word64be bs :: Double)
 
 word64be :: ByteString -> Word64
 word64be = \s ->
@@ -147,19 +200,20 @@ word64be = \s ->
               (fromIntegral (s `SU.unsafeIndex` 7) )
 {-# INLINE word64be #-}
 
-simpleLE
+decodeSimpleLE
     :: V.Vector v SomeData
     => ByteString
     -> Maybe (v SomeData)
-simpleLE bs0 = runST $
+decodeSimpleLE bs0 = runST $
     readInt64 bs0 $ \bs1 len -> do
-        mv <- MV.new len
+        let len' = fromIntegral len
+        mv <- MV.new len'
         let loop idx bs
-                | idx >= len = Just <$> V.unsafeFreeze mv
+                | idx >= len' = Just <$> V.unsafeFreeze mv
                 | otherwise =
-                    readInt64 bs  $ \bsX x ->
-                    readInt64 bsX $ \bsY y ->
-                    readInt64 bsY $ \bsZ z -> do
+                    readInt64  bs  $ \bsX x ->
+                    readWord8  bsX $ \bsY y ->
+                    readDouble bsY $ \bsZ z -> do
                         MV.unsafeWrite mv idx (SomeData x y z)
                         loop (idx + 1) bsZ
         loop 0 bs1
@@ -168,9 +222,21 @@ simpleLE bs0 = runST $
         | S.length bs < 8 = return Nothing
         | otherwise = f
             (SU.unsafeDrop 8 bs)
-            (fromIntegral $ word64le bs)
+            (fromIntegral $ word64le bs :: Int64)
     {-# INLINE readInt64 #-}
-{-# INLINE simpleLE #-}
+
+    readWord8 bs f
+        | S.length bs < 1 = return Nothing
+        | otherwise = f
+            (SU.unsafeDrop 1 bs)
+            (bs `SU.unsafeIndex` 0)
+
+    readDouble bs f
+        | S.length bs < 8 = return Nothing
+        | otherwise = f
+            (SU.unsafeDrop 8 bs)
+            (doublele bs)
+{-# INLINE decodeSimpleLE #-}
 
 word64le :: ByteString -> Word64
 #if 0
@@ -187,6 +253,10 @@ word64le = \s ->
 word64le (PS x s _) =
     accursedUnutterablePerformIO $ withForeignPtr x $ \p -> peekByteOff p s
 {-# INLINE word64le #-}
+
+doublele :: ByteString -> Double
+doublele (PS x s _) =
+    accursedUnutterablePerformIO $ withForeignPtr x $ \p -> peekByteOff p s
 
 type Total = Int
 type Offset = Int
@@ -223,10 +293,10 @@ instance PrimMonad (Peek s) where
         x <- primitive (unsafeCoerce# action)
         k offset x
 
-simpleClass :: Simple a
+decodeSimpleClass :: Simple a
             => ByteString
             -> Maybe a
-simpleClass (PS x s len) =
+decodeSimpleClass (PS x s len) =
     accursedUnutterablePerformIO $ withForeignPtr x $ \p ->
         let total = len + s
             final offset y
@@ -275,10 +345,10 @@ instance PrimMonad (PeekEx s) where
     primitive action = PeekEx $ \_ _ _ ->
         primitive (unsafeCoerce# action)
 
-simpleClassEx :: Simple a
+decodeSimpleClassEx :: Simple a
               => ByteString
               -> Maybe a
-simpleClassEx (PS x s len) =
+decodeSimpleClassEx (PS x s len) =
     accursedUnutterablePerformIO $ withForeignPtr x $ \p -> do
         let total = len + s
         offsetRef <- newOffsetRef s
@@ -325,12 +395,22 @@ instance Simple Int64 where
     simplePoke = pokeByteOff
     simplePeek = storablePeek
     simplePeekEx = storablePeekEx
+instance Simple Word8 where
+    simpleSize = Left 1
+    simplePoke = pokeByteOff
+    simplePeek = storablePeek
+    simplePeekEx = storablePeekEx
+instance Simple Double where
+    simpleSize = Left 8
+    simplePoke = pokeByteOff
+    simplePeek = storablePeek
+    simplePeekEx = storablePeekEx
 instance Simple SomeData where
-    simpleSize = Left 24
+    simpleSize = Left 17
     simplePoke p s (SomeData x y z) = do
         simplePoke p s x
         simplePoke p (s + 8) y
-        simplePoke p (s + 16) z
+        simplePoke p (s + 9) z
     simplePeek = SomeData
         <$> simplePeek
         <*> simplePeek
@@ -380,5 +460,5 @@ instance Simple a => Simple (Data.Vector.Vector a) where
                     loop $! i + 1
         loop 0
 
-simpleEncode :: Simple a => a -> ByteString
-simpleEncode x = unsafeCreate (either id ($ x) simpleSize) (\p -> simplePoke p 0 x)
+encodeSimpleClass :: Simple a => a -> ByteString
+encodeSimpleClass x = unsafeCreate (either id ($ x) simpleSize) (\p -> simplePoke p 0 x)

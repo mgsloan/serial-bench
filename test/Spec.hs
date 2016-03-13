@@ -4,6 +4,7 @@ import Test.QuickCheck.Arbitrary
 import Lib
 import Control.Applicative
 import qualified Data.Vector as V
+import Control.Monad (forM_)
 
 instance Arbitrary SomeData where
     arbitrary = SomeData
@@ -12,25 +13,9 @@ instance Arbitrary SomeData where
         <*> arbitrary
 
 main :: IO ()
-main = do
-    let test' enc name func =
+main = hspec $ forM_ codecs $ \(Codec name enc dec) ->
             prop name $ \list ->
-                let v = V.fromList list
+                let v = V.fromList (list :: [SomeData])
                     bs = enc v
-                    mv = func bs
+                    mv = dec bs
                  in mv `shouldBe` Just v
-        test = test' encode
-
-    hspec $ do
-        describe "decoding" $ do
-            test "binary" binary
-            test "cereal" cereal
-            test "simple" simple
-            test' encodeLE "simpleLE" simpleLE
-            test' encodeLE "simpleClass" simpleClass
-            test' encodeLE "simpleClassEx" simpleClassEx
-
-        describe "encode" $ do
-            prop "simpleEncode" $ \list ->
-                let v = V.fromList list
-                 in simpleEncode v `shouldBe` encodeLE v
