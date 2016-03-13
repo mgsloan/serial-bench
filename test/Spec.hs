@@ -15,9 +15,21 @@ instance Arbitrary ArbSomeData where
         <*> arbitrary
 
 main :: IO ()
-main = hspec $ forM_ codecs $ \(Codec name enc dec) ->
-            prop name $ \list ->
-                let v = V.fromList (map toSomeData list)
-                    bs = enc v
-                    mv = dec bs
-                 in mv `shouldBe` Just v
+main = hspec $ forM_ codecs $ \(Codec encs decs) -> do
+    (refEncName, refEnc):_ <- return encs
+    (refDecName, refDec):_ <- return decs
+
+    prop (refEncName ++ "/" ++ refDecName) $ \list ->
+        let v = V.fromList (map toSomeData list)
+         in refDec (refEnc v) `shouldBe` Just v
+
+    forM_ (drop 1 encs) $ \(name, enc) -> do
+        prop (name ++ " vs " ++ refEncName) $ \list ->
+            let v = V.fromList (map toSomeData list)
+             in enc v `shouldBe` refEnc v
+
+    forM_ (drop 1 decs) $ \(name, dec) -> do
+        prop (name ++ " vs " ++ refDecName) $ \list ->
+            let v = V.fromList (map toSomeData list)
+                bytes = refEnc v
+             in dec bytes `shouldBe` refDec bytes

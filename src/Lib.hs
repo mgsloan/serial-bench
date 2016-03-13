@@ -54,23 +54,34 @@ instance NFData SomeData where
 -------------------------------------------------------------------
 -- Codecs, to make it easier to write the test suite and benchamrks
 data Codec where
-    Codec :: NFData binary
-          => String
-          -> (Data.Vector.Vector SomeData -> binary)
-          -> (binary -> Maybe (Data.Vector.Vector SomeData))
+    Codec :: (NFData binary, Eq binary, Show binary)
+          => [(String, Data.Vector.Vector SomeData -> binary)]
+          -> [(String, binary -> Maybe (Data.Vector.Vector SomeData))]
           -> Codec
 
 codecs :: [Codec]
 codecs =
-    [ Codec "simplePeek" encodeSimpleRaw decodeSimpleClass
-    , Codec "simplePeekEx" encodeSimpleRaw decodeSimpleClassEx
-    , Codec "simplePoke" encodeSimplePoke decodeSimpleClassEx
-    , Codec "simplePokeRef" encodeSimplePokeRef decodeSimpleClassEx
-    , Codec "simpleLE" encodeSimpleLE decodeSimpleLE
-    , Codec "simpleBE" encodeSimpleBE decodeSimpleBE
-    , Codec "cereal" C.encode decodeCereal
-    , Codec "binary" B.encode decodeBinary
+    [ Codec
+        [ ("encodeSimpleRaw", encodeSimpleRaw)
+        , ("encodeSimplePoke", encodeSimplePoke)
+        , ("encodeSimplePokeRef", encodeSimplePokeRef)
+        , ("encodeSimpleLE", encodeSimpleLE)
+        ]
+        [ ("decodeSimplePeek", decodeSimplePeek)
+        , ("decodeSimplePeekEx", decodeSimplePeekEx)
+        , ("decodeSimpleLE", decodeSimpleLE)
+        ]
+    , Codec
+        [ ("encodeSimpleBE", encodeSimpleBE)
+        , ("encodeCereal", C.encode)
+        ]
+        [ ("decodeSimpleBE", decodeSimpleBE)
+        , ("decodeCereal", decodeCereal)
+        ]
+    , simpleCodec "binary" B.encode decodeBinary
     ]
+  where
+    simpleCodec name enc dec = Codec [(name, enc)] [(name, dec)]
 -------------------------------------------------------------------
 
 -------------------------------------------------------------------
@@ -592,19 +603,19 @@ encodeSimplePokeRef x = unsafeCreate
 {-# INLINE encodeSimplePokeRef #-}
 
 -- | Decode using the @Peek@ continuation-passing approach
-decodeSimpleClass :: Simple a => ByteString -> Maybe a
-decodeSimpleClass (PS x s len) =
+decodeSimplePeek :: Simple a => ByteString -> Maybe a
+decodeSimplePeek (PS x s len) =
     accursedUnutterablePerformIO $ withForeignPtr x $ \p ->
         let total = len + s
             final offset y
                 | offset == total = return (Just y)
                 | otherwise = return Nothing
          in runPeek simplePeek (len + s) p s final
-{-# INLINE decodeSimpleClass #-}
+{-# INLINE decodeSimplePeek #-}
 
 -- | Decode using the @PeekEx@ ref/exception approach
-decodeSimpleClassEx :: Simple a => ByteString -> Maybe a
-decodeSimpleClassEx (PS x s len) =
+decodeSimplePeekEx :: Simple a => ByteString -> Maybe a
+decodeSimplePeekEx (PS x s len) =
     accursedUnutterablePerformIO $ withForeignPtr x $ \p -> do
         let total = len + s
         offsetRef <- newOffsetRef s
@@ -615,5 +626,5 @@ decodeSimpleClassEx (PS x s len) =
                     then Just y
                     else Nothing
         runner `catch` \PeekException -> return Nothing
-{-# INLINE decodeSimpleClassEx #-}
+{-# INLINE decodeSimplePeekEx #-}
 -------------------------------------------------------------------
