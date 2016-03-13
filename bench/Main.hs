@@ -10,9 +10,10 @@ main = do
 
         benchEnc (Codec encs _) = flip map encs $ \(name, enc) ->
             bench name $ nf enc sds
-        benchDec (Codec ((_, enc):_) decs) = flip map decs $ \(name, dec) ->
+        benchDec (Codec ((_, enc):_) decs) =
             let bytes = enc sds
-             in bytes `seq` bench name (nf dec bytes)
+             in bytes `seq` flip map decs $ \(name, dec) ->
+                     bench name (nf dec bytes)
         benchDec (Codec [] _) = error "benchDec with no encs"
 
     defaultMain
