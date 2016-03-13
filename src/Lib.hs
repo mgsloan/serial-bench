@@ -540,8 +540,8 @@ instance Simple SomeData where
         simpleRawPoke p (s + 9) z
     simplePoke (SomeData x y z) =
         simplePoke x <>
-        simplePoke y <>
-        simplePoke z
+        (simplePoke y <>
+        simplePoke z)
     simplePokeMonad (SomeData x y z) = do
         simplePokeMonad x
         simplePokeMonad y
@@ -585,8 +585,10 @@ instance Simple a => Simple (Data.Vector.Vector a) where
                     loop (i + 1) (s' + getSize x)
         loop 0 (s + 8)
     simplePoke v =
+        -- TODO: This is _much_ slower with foldMap, try to come up with a
+        -- smaller demonstration of the problem
         simplePoke (fromIntegral (V.length v) :: Int64) <>
-        foldMap simplePoke v
+        V.foldr (mappend . simplePoke) mempty v
     simplePokeMonad v = do
         simplePokeMonad (fromIntegral (V.length v) :: Int64)
         V.mapM_ simplePokeMonad v
