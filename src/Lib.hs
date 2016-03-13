@@ -68,6 +68,7 @@ codecs =
         , ("encodeSimplePoke", encodeSimplePoke)
         , ("encodeSimplePokeMonad", encodeSimplePokeMonad)
         , ("encodeSimplePokeRef", encodeSimplePokeRef)
+        , ("encodeSimplePokeRefMonad", encodeSimplePokeRefMonad)
         , ("encodeBuilderLE", encodeBuilderLE)
         ]
         [ ("decodeSimplePeek", decodeSimplePeek)
@@ -488,6 +489,42 @@ storablePokeRef x = PokeRef $ \ptr ref -> do
 -------------------------------------------------------------------
 
 -------------------------------------------------------------------
+-- Reference-based monadic Poke implementation
+newtype PokeRefMonad a = PokeRefMonad
+    { runPokeRefMonad :: forall byte.
+        Ptr byte
+     -> OffsetRef
+     -> IO a
+    }
+    deriving Functor
+instance Applicative PokeRefMonad where
+    pure x = PokeRefMonad $ \_ _ -> pure x
+    {-# INLINE pure #-}
+    PokeRefMonad f <*> PokeRefMonad g = PokeRefMonad $ \ptr ref ->
+        f ptr ref <*> g ptr ref
+    {-# INLINE (<*>) #-}
+    PokeRefMonad f *> PokeRefMonad g = PokeRefMonad $ \ptr ref ->
+        f ptr ref *> g ptr ref
+    {-# INLINE (*>) #-}
+instance Monad PokeRefMonad where
+    return = pure
+    {-# INLINE return #-}
+    (>>) = (*>)
+    {-# INLINE (>>) #-}
+    PokeRefMonad x >>= f = PokeRefMonad $ \ptr ref -> do
+        x' <- x ptr ref
+        runPokeRefMonad (f x') ptr ref
+    {-# INLINE (>>=) #-}
+
+storablePokeRefMonad :: Storable a => a -> PokeRefMonad ()
+storablePokeRefMonad x = PokeRefMonad $ \ptr ref -> do
+    offset <- readOffsetRef ref
+    pokeByteOff ptr offset x
+    writeOffsetRef ref $! offset + sizeOf x
+{-# INLINE storablePokeRefMonad #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
 
 -- | A Simple serialization typeclass. Includes both @Peek@ and @PeekEx@
 -- implementations, though in a real library we would just choose the faster
@@ -517,6 +554,11 @@ class Simple a where
     default simplePokeRef :: Storable a => a -> PokeRef
     simplePokeRef = storablePokeRef
     {-# INLINE simplePokeRef #-}
+
+    simplePokeRefMonad :: a -> PokeRefMonad ()
+    default simplePokeRefMonad :: Storable a => a -> PokeRefMonad ()
+    simplePokeRefMonad = storablePokeRefMonad
+    {-# INLINE simplePokeRefMonad #-}
 
     simplePeek :: Peek s a
     default simplePeek :: Storable a => Peek s a
@@ -550,6 +592,10 @@ instance Simple SomeData where
         simplePokeRef x <>
         simplePokeRef y <>
         simplePokeRef z
+    simplePokeRefMonad (SomeData x y z) = do
+        simplePokeRefMonad x
+        simplePokeRefMonad y
+        simplePokeRefMonad z
     simplePeek = SomeData
         <$> simplePeek
         <*> simplePeek
@@ -563,6 +609,7 @@ instance Simple SomeData where
     {-# INLINE simplePoke #-}
     {-# INLINE simplePokeMonad #-}
     {-# INLINE simplePokeRef #-}
+    {-# INLINE simplePokeRefMonad #-}
     {-# INLINE simplePeek #-}
     {-# INLINE simplePeekEx #-}
 
@@ -595,6 +642,9 @@ instance Simple a => Simple (Data.Vector.Vector a) where
     simplePokeRef v =
         simplePokeRef (fromIntegral (V.length v) :: Int64) <>
         V.foldr (mappend . simplePokeRef) mempty v
+    simplePokeRefMonad v = do
+        simplePokeRefMonad (fromIntegral (V.length v) :: Int64)
+        V.mapM_ simplePokeRefMonad v
     simplePeek = do
         len :: Int64 <- simplePeek
         let len' = fromIntegral len
@@ -622,6 +672,7 @@ instance Simple a => Simple (Data.Vector.Vector a) where
     {-# INLINE simplePoke #-}
     {-# INLINE simplePokeMonad #-}
     {-# INLINE simplePokeRef #-}
+    {-# INLINE simplePokeRefMonad #-}
     {-# INLINE simplePeek #-}
     {-# INLINE simplePeekEx #-}
 
@@ -656,6 +707,14 @@ encodeSimplePokeRef x = unsafeCreate
         ref <- newOffsetRef 0
         runPokeRef (simplePokeRef x) p ref)
 {-# INLINE encodeSimplePokeRef #-}
+
+encodeSimplePokeRefMonad :: Simple a => a -> ByteString
+encodeSimplePokeRefMonad x = unsafeCreate
+    (either id ($ x) simpleSize)
+    (\p -> do
+        ref <- newOffsetRef 0
+        runPokeRefMonad (simplePokeRefMonad x) p ref)
+{-# INLINE encodeSimplePokeRefMonad #-}
 
 -- | Decode using the @Peek@ continuation-passing approach
 decodeSimplePeek :: Simple a => ByteString -> Maybe a
