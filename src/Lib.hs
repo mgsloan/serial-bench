@@ -46,6 +46,7 @@ import GHC.Base   ( unsafeCoerce# )
 import Control.Exception (Exception, catch, throwIO)
 import Data.Typeable (Typeable)
 import qualified Data.Vector.Unboxed.Mutable
+import qualified Control.Monad.Fail as Fail
 
 data SomeData = SomeData !Int64 !Int64 !Int64
     deriving (Eq, Show)
@@ -213,6 +214,9 @@ instance Monad (Peek s) where
     Peek x >>= f = Peek $ \total ptr offset1 k ->
         x total ptr offset1 $ \offset2 x' ->
         runPeek (f x') total ptr offset2 k
+    fail = Fail.fail
+instance Fail.MonadFail (Peek s) where
+    fail _ = Peek $ \_ _ _ _ -> pure Nothing
 instance PrimMonad (Peek s) where
     type PrimState (Peek s) = s
     primitive action = Peek $ \_ _ offset k -> do
@@ -263,6 +267,9 @@ instance Monad (PeekEx s) where
     PeekEx x >>= f = PeekEx $ \total ptr ref -> do
         x' <- x total ptr ref
         runPeekEx (f x') total ptr ref
+    fail = Fail.fail
+instance Fail.MonadFail (PeekEx s) where
+    fail _ = PeekEx $ \_ _ _ -> throwIO NotEnoughBytes
 instance PrimMonad (PeekEx s) where
     type PrimState (PeekEx s) = s
     primitive action = PeekEx $ \_ _ _ ->
