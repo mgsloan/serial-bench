@@ -594,7 +594,7 @@ instance Simple a => Simple (Data.Vector.Vector a) where
         V.mapM_ simplePokeMonad v
     simplePokeRef v =
         simplePokeRef (fromIntegral (V.length v) :: Int64) <>
-        foldMap simplePokeRef v
+        V.foldr (mappend . simplePokeRef) mempty v
     simplePeek = do
         len :: Int64 <- simplePeek
         let len' = fromIntegral len
