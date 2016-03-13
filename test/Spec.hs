@@ -28,6 +28,7 @@ main = do
             test "simple" simple
             test' encodeLE "simpleLE" simpleLE
             test' encodeLE "simpleClass" simpleClass
+            test' encodeLE "simpleClassEx" simpleClassEx
 
         describe "encode" $ do
             prop "simpleEncode" $ \list ->

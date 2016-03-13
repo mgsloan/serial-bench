@@ -20,6 +20,7 @@ main = do
             , bench "simple" $ nf (asVector simple) bs
             , bench "simpleLE" $ nf (asVector simpleLE) bsLE
             , bench "simpleClass" $ nf (asVector simpleClass) bsLE
+            , bench "simpleClassEx" $ nf (asVector simpleClassEx) bsLE
             ]
         ]
 

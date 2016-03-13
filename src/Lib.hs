@@ -15,6 +15,7 @@ module Lib
     , simpleLE
     , simpleEncode
     , simpleClass
+    , simpleClassEx
     ) where
 
 import Data.Int
@@ -42,6 +43,9 @@ import Foreign.Ptr (Ptr)
 import qualified Data.Vector
 import Control.Monad.Primitive (PrimMonad (..), unsafePrimToIO)
 import GHC.Base   ( unsafeCoerce# )
+import Control.Exception (Exception, catch, throwIO)
+import Data.Typeable (Typeable)
+import qualified Data.Vector.Unboxed.Mutable
 
 data SomeData = SomeData !Int64 !Int64 !Int64
     deriving (Eq, Show)
@@ -226,6 +230,63 @@ simpleClass (PS x s len) =
                 | otherwise = return Nothing
          in runPeek simplePeek (len + s) p s final
 
+newtype OffsetRef = OffsetRef
+    (Data.Vector.Unboxed.Mutable.MVector RealWorld Offset)
+
+newOffsetRef :: Int -> IO OffsetRef
+newOffsetRef x = OffsetRef <$> MV.replicate 1 x
+
+readOffsetRef :: OffsetRef -> IO Int
+readOffsetRef (OffsetRef mv) = MV.unsafeRead mv 0
+
+writeOffsetRef :: OffsetRef -> Int -> IO ()
+writeOffsetRef (OffsetRef mv) x = MV.unsafeWrite mv 0 x
+
+newtype PeekEx s a = PeekEx
+    { runPeekEx :: forall byte.
+        Total
+     -> Ptr byte
+     -> OffsetRef
+     -> IO a
+    }
+    deriving Functor
+instance Applicative (PeekEx s) where
+    pure x = PeekEx (\_ _ _ -> pure x)
+    PeekEx f <*> PeekEx g = PeekEx $ \total ptr ref ->
+        f total ptr ref <*> g total ptr ref
+    PeekEx f *> PeekEx g = PeekEx $ \total ptr ref ->
+        f total ptr ref *>
+        g total ptr ref
+instance Monad (PeekEx s) where
+    return = pure
+    (>>) = (*>)
+    PeekEx x >>= f = PeekEx $ \total ptr ref -> do
+        x' <- x total ptr ref
+        runPeekEx (f x') total ptr ref
+instance PrimMonad (PeekEx s) where
+    type PrimState (PeekEx s) = s
+    primitive action = PeekEx $ \_ _ _ ->
+        primitive (unsafeCoerce# action)
+
+simpleClassEx :: Simple a
+              => ByteString
+              -> Maybe a
+simpleClassEx (PS x s len) =
+    accursedUnutterablePerformIO $ withForeignPtr x $ \p -> do
+        let total = len + s
+        offsetRef <- newOffsetRef s
+        let runner = do
+                y <- runPeekEx simplePeekEx (len + s) p offsetRef
+                offset <- readOffsetRef offsetRef
+                return $ if offset == total
+                    then Just y
+                    else Nothing
+        runner `catch` \NotEnoughBytes -> return Nothing
+
+data NotEnoughBytes = NotEnoughBytes
+    deriving (Show, Typeable)
+instance Exception NotEnoughBytes
+
 storablePeek :: forall s a. Storable a => Peek s a
 storablePeek = Peek $ \total ptr offset k ->
     let offset' = offset + needed
@@ -236,14 +297,27 @@ storablePeek = Peek $ \total ptr offset k ->
                 k offset' x
             else return Nothing
 
+storablePeekEx :: forall s a. Storable a => PeekEx s a
+storablePeekEx = PeekEx $ \total ptr offsetRef -> do
+    offset <- readOffsetRef offsetRef
+    let offset' = offset + needed
+        needed = sizeOf (undefined :: a)
+    if total >= offset'
+        then do
+            writeOffsetRef offsetRef offset'
+            peekByteOff ptr offset
+        else throwIO NotEnoughBytes
+
 class Simple a where
     simpleSize :: Either Int (a -> Int)
     simplePoke :: Ptr byte -> Int -> a -> IO ()
     simplePeek :: Peek s a
+    simplePeekEx :: PeekEx s a
 instance Simple Int64 where
     simpleSize = Left 8
     simplePoke = pokeByteOff
     simplePeek = storablePeek
+    simplePeekEx = storablePeekEx
 instance Simple SomeData where
     simpleSize = Left 24
     simplePoke p s (SomeData x y z) = do
@@ -254,6 +328,10 @@ instance Simple SomeData where
         <$> simplePeek
         <*> simplePeek
         <*> simplePeek
+    simplePeekEx = SomeData
+        <$> simplePeekEx
+        <*> simplePeekEx
+        <*> simplePeekEx
 instance Simple a => Simple (Data.Vector.Vector a) where
     simpleSize = Right $ \v ->
         case simpleSize of
@@ -280,6 +358,17 @@ instance Simple a => Simple (Data.Vector.Vector a) where
                 | i >= len' = V.unsafeFreeze mv
                 | otherwise = do
                     x <- simplePeek
+                    MV.unsafeWrite mv i x
+                    loop $! i + 1
+        loop 0
+    simplePeekEx = do
+        len :: Int64 <- simplePeekEx
+        let len' = fromIntegral len
+        mv <- MV.new len'
+        let loop i
+                | i >= len' = V.unsafeFreeze mv
+                | otherwise = do
+                    x <- simplePeekEx
                     MV.unsafeWrite mv i x
                     loop $! i + 1
         loop 0
