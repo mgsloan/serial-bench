@@ -22,11 +22,14 @@ main = do
         test = test' encode
 
     hspec $ do
-        test "binary" binary
-        test "cereal" cereal
-        test "simple" simple
-        test' encodeLE "simpleLE" simpleLE
+        describe "decoding" $ do
+            test "binary" binary
+            test "cereal" cereal
+            test "simple" simple
+            test' encodeLE "simpleLE" simpleLE
+            test' encodeLE "simpleClass" simpleClass
 
-        prop "simpleEncode" $ \list ->
-            let v = V.fromList list
-             in simpleEncode v `shouldBe` encodeLE v
+        describe "encode" $ do
+            prop "simpleEncode" $ \list ->
+                let v = V.fromList list
+                 in simpleEncode v `shouldBe` encodeLE v
