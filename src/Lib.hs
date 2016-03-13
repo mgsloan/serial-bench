@@ -7,6 +7,7 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveGeneric #-}
 module Lib
     ( SomeData (..)
     , Codec (..)
@@ -42,11 +43,12 @@ import Data.Typeable (Typeable)
 import qualified Data.Vector.Unboxed.Mutable
 import qualified Control.Monad.Fail as Fail
 import Unsafe.Coerce (unsafeCoerce)
+import GHC.Generics (Generic)
 
 -------------------------------------------------------------------
 -- The datatype we're going to be experimenting with
 data SomeData = SomeData !Int64 !Word8 !Double
-    deriving (Eq, Show)
+    deriving (Eq, Show, Generic)
 instance NFData SomeData where
     rnf x = x `seq` ()
 -------------------------------------------------------------------
@@ -65,17 +67,17 @@ codecs =
         [ ("encodeSimpleRaw", encodeSimpleRaw)
         , ("encodeSimplePoke", encodeSimplePoke)
         , ("encodeSimplePokeRef", encodeSimplePokeRef)
-        , ("encodeSimpleLE", encodeSimpleLE)
+        , ("encodeBuilderLE", encodeBuilderLE)
         ]
         [ ("decodeSimplePeek", decodeSimplePeek)
         , ("decodeSimplePeekEx", decodeSimplePeekEx)
-        , ("decodeSimpleLE", decodeSimpleLE)
+        , ("decodeRawLE", decodeRawLE)
         ]
     , Codec
-        [ ("encodeSimpleBE", encodeSimpleBE)
+        [ ("encodeBuilderBE", encodeBuilderBE)
         , ("encodeCereal", C.encode)
         ]
-        [ ("decodeSimpleBE", decodeSimpleBE)
+        [ ("decodeRawBE", decodeRawBE)
         , ("decodeCereal", decodeCereal)
         ]
     , simpleCodec "binary" B.encode decodeBinary
@@ -86,14 +88,7 @@ codecs =
 
 -------------------------------------------------------------------
 -- binary package
-instance B.Binary SomeData where
-    get = SomeData <$> B.get <*> B.get <*> B.get
-    put (SomeData x y z) = do
-        B.put x
-        B.put y
-        B.put z
-    {-# INLINE get #-}
-    {-# INLINE put #-}
+instance B.Binary SomeData
 
 decodeBinary
     :: B.Binary (v SomeData)
@@ -111,14 +106,7 @@ decodeBinary = either
 
 -------------------------------------------------------------------
 -- cereal package
-instance C.Serialize SomeData where
-    get = SomeData <$> C.get <*> C.get <*> C.get
-    put (SomeData x y z) = do
-        C.put x
-        C.put y
-        C.put z
-    {-# INLINE get #-}
-    {-# INLINE put #-}
+instance C.Serialize SomeData
 
 decodeCereal
     :: C.Serialize (v SomeData)
@@ -130,8 +118,8 @@ decodeCereal = either (const Nothing) Just . C.decode
 
 -------------------------------------------------------------------
 -- low level big-endian (non-host order), using bytestring-builder
-encodeSimpleBE :: V.Vector v SomeData => v SomeData -> ByteString
-encodeSimpleBE v = L.toStrict
+encodeBuilderBE :: V.Vector v SomeData => v SomeData -> ByteString
+encodeBuilderBE v = L.toStrict
          $ Builder.toLazyByteString
          $ Builder.int64BE (fromIntegral $ V.length v)
         <> V.foldr (\sd b -> go sd <> b) mempty v
@@ -141,13 +129,13 @@ encodeSimpleBE v = L.toStrict
        <> Builder.word8 y
        <> Builder.doubleBE z
     {-# INLINE go #-}
-{-# INLINE encodeSimpleBE #-}
+{-# INLINE encodeBuilderBE #-}
 
-decodeSimpleBE
+decodeRawBE
     :: V.Vector v SomeData
     => ByteString
     -> Maybe (v SomeData)
-decodeSimpleBE bs0 = runST $
+decodeRawBE bs0 = runST $
     readInt64 bs0 $ \bs1 len -> do
         let len' = fromIntegral len
         mv <- MV.new len'
@@ -183,7 +171,7 @@ decodeSimpleBE bs0 = runST $
             -- benchmarking here
             (unsafeCoerce $ word64be bs :: Double)
     {-# INLINE readDouble #-}
-{-# INLINE decodeSimpleBE #-}
+{-# INLINE decodeRawBE #-}
 
 word64be :: ByteString -> Word64
 word64be = \s ->
@@ -200,8 +188,8 @@ word64be = \s ->
 
 -------------------------------------------------------------------
 -- low level little-endian (host order), using bytestring-builder
-encodeSimpleLE :: V.Vector v SomeData => v SomeData -> ByteString
-encodeSimpleLE v = L.toStrict
+encodeBuilderLE :: V.Vector v SomeData => v SomeData -> ByteString
+encodeBuilderLE v = L.toStrict
          $ Builder.toLazyByteString
          $ Builder.int64LE (fromIntegral $ V.length v)
         <> V.foldr (\sd b -> go sd <> b) mempty v
@@ -211,13 +199,13 @@ encodeSimpleLE v = L.toStrict
        <> Builder.word8 y
        <> Builder.doubleLE z
     {-# INLINE go #-}
-{-# INLINE encodeSimpleLE #-}
+{-# INLINE encodeBuilderLE #-}
 
-decodeSimpleLE
+decodeRawLE
     :: V.Vector v SomeData
     => ByteString
     -> Maybe (v SomeData)
-decodeSimpleLE bs0 = runST $
+decodeRawLE bs0 = runST $
     readInt64 bs0 $ \bs1 len -> do
         let len' = fromIntegral len
         mv <- MV.new len'
@@ -251,7 +239,7 @@ decodeSimpleLE bs0 = runST $
             (SU.unsafeDrop 8 bs)
             (doublele bs)
     {-# INLINE readDouble #-}
-{-# INLINE decodeSimpleLE #-}
+{-# INLINE decodeRawLE #-}
 
 word64le :: ByteString -> Word64
 #if 0
