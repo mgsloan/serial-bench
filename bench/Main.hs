@@ -1,8 +1,7 @@
 {-# LANGUAGE GADTs #-}
-import Criterion.Main
-import Lib
-import qualified Data.Vector as V
-import Data.ByteString (ByteString)
+import           Criterion.Main
+import qualified Data.Vector    as V
+import           Lib
 
 main :: IO ()
 main = do

@@ -1,13 +1,15 @@
-import Test.Hspec
-import Test.Hspec.QuickCheck
-import Test.QuickCheck.Arbitrary
-import Lib
-import Control.Applicative
-import qualified Data.Vector as V
-import Control.Monad (forM_)
+import           Control.Monad             (forM_)
+import qualified Data.Vector               as V
+import           Lib
+import           Test.Hspec
+import           Test.Hspec.QuickCheck
+import           Test.QuickCheck.Arbitrary
 
-instance Arbitrary SomeData where
-    arbitrary = SomeData
+newtype ArbSomeData = ArbSomeData { toSomeData :: SomeData }
+    deriving (Show, Eq)
+
+instance Arbitrary ArbSomeData where
+    arbitrary = fmap ArbSomeData $ SomeData
         <$> arbitrary
         <*> arbitrary
         <*> arbitrary
@@ -15,7 +17,7 @@ instance Arbitrary SomeData where
 main :: IO ()
 main = hspec $ forM_ codecs $ \(Codec name enc dec) ->
             prop name $ \list ->
-                let v = V.fromList (list :: [SomeData])
+                let v = V.fromList (map toSomeData list)
                     bs = enc v
                     mv = dec bs
                  in mv `shouldBe` Just v

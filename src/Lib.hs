@@ -6,32 +6,16 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE DefaultSignatures #-}
 module Lib
     ( SomeData (..)
     , Codec (..)
     , codecs
-
-    , encodeBinary
-    , decodeBinary
-
-    , encodeCereal
-    , decodeCereal
-
-    , encodeSimpleBE
-    , decodeSimpleBE
-
-    , encodeSimpleLE
-    , decodeSimpleLE
-
-    , encodeSimpleClass
-    , decodeSimpleClass
-    , decodeSimpleClassEx
     ) where
 
 import Data.Int
 import Data.Word
 import qualified Data.Binary as B
-import Data.Binary.Get (getWord64be)
 import qualified Data.Serialize as C
 import qualified Data.Vector.Generic as V
 import qualified Data.Vector.Generic.Mutable as MV
@@ -51,7 +35,7 @@ import Foreign.ForeignPtr (withForeignPtr)
 import Foreign.Storable (peekByteOff, pokeByteOff, Storable, sizeOf)
 import Foreign.Ptr (Ptr)
 import qualified Data.Vector
-import Control.Monad.Primitive (PrimMonad (..), unsafePrimToIO)
+import Control.Monad.Primitive (PrimMonad (..))
 import GHC.Base   ( unsafeCoerce# )
 import Control.Exception (Exception, catch, throwIO)
 import Data.Typeable (Typeable)
@@ -59,6 +43,16 @@ import qualified Data.Vector.Unboxed.Mutable
 import qualified Control.Monad.Fail as Fail
 import Unsafe.Coerce (unsafeCoerce)
 
+-------------------------------------------------------------------
+-- The datatype we're going to be experimenting with
+data SomeData = SomeData !Int64 !Word8 !Double
+    deriving (Eq, Show)
+instance NFData SomeData where
+    rnf x = x `seq` ()
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- Codecs, to make it easier to write the test suite and benchamrks
 data Codec where
     Codec :: NFData binary
           => String
@@ -68,19 +62,17 @@ data Codec where
 
 codecs :: [Codec]
 codecs =
-    [ Codec "binary" encodeBinary decodeBinary
-    , Codec "cereal" encodeCereal decodeCereal
-    , Codec "simpleBE" encodeSimpleBE decodeSimpleBE
-    , Codec "simpleLE" encodeSimpleLE decodeSimpleLE
-    , Codec "simpleClass" encodeSimpleClass decodeSimpleClass
+    [ Codec "simpleClass" encodeSimpleClass decodeSimpleClass
     , Codec "simpleClassEx" encodeSimpleClass decodeSimpleClassEx
+    , Codec "simpleLE" encodeSimpleLE decodeSimpleLE
+    , Codec "simpleBE" encodeSimpleBE decodeSimpleBE
+    , Codec "cereal" C.encode decodeCereal
+    , Codec "binary" B.encode decodeBinary
     ]
+-------------------------------------------------------------------
 
-data SomeData = SomeData !Int64 !Word8 !Double
-    deriving (Eq, Show)
-instance NFData SomeData where
-    rnf x = x `seq` ()
-
+-------------------------------------------------------------------
+-- binary package
 instance B.Binary SomeData where
     get = SomeData <$> B.get <*> B.get <*> B.get
     put (SomeData x y z) = do
@@ -89,43 +81,6 @@ instance B.Binary SomeData where
         B.put z
     {-# INLINE get #-}
     {-# INLINE put #-}
-
-instance C.Serialize SomeData where
-    get = SomeData <$> C.get <*> C.get <*> C.get
-    put (SomeData x y z) = do
-        C.put x
-        C.put y
-        C.put z
-    {-# INLINE get #-}
-    {-# INLINE put #-}
-
-encodeSimpleBE :: V.Vector v SomeData => v SomeData -> ByteString
-encodeSimpleBE v = L.toStrict
-         $ Builder.toLazyByteString
-         $ Builder.int64BE (fromIntegral $ V.length v)
-        <> V.foldr (\sd b -> go sd <> b) mempty v
-  where
-    go (SomeData x y z)
-        = Builder.int64BE x
-       <> Builder.word8 y
-       <> Builder.doubleBE z
-
-encodeSimpleLE :: V.Vector v SomeData => v SomeData -> ByteString
-encodeSimpleLE v = L.toStrict
-         $ Builder.toLazyByteString
-         $ Builder.int64LE (fromIntegral $ V.length v)
-        <> V.foldr (\sd b -> go sd <> b) mempty v
-  where
-    go (SomeData x y z)
-        = Builder.int64LE x
-       <> Builder.word8 y
-       <> Builder.doubleLE z
-
-encodeBinary
-    :: B.Binary (v SomeData)
-    => v SomeData
-    -> L.ByteString
-encodeBinary = B.encode
 
 decodeBinary
     :: B.Binary (v SomeData)
@@ -138,18 +93,42 @@ decodeBinary = either
                     then Just x
                     else Nothing)
        . B.decodeOrFail
+{-# INLINE decodeBinary #-}
+-------------------------------------------------------------------
 
-encodeCereal
-    :: C.Serialize (v SomeData)
-    => v SomeData
-    -> ByteString
-encodeCereal = C.encode
+-------------------------------------------------------------------
+-- cereal package
+instance C.Serialize SomeData where
+    get = SomeData <$> C.get <*> C.get <*> C.get
+    put (SomeData x y z) = do
+        C.put x
+        C.put y
+        C.put z
+    {-# INLINE get #-}
+    {-# INLINE put #-}
 
 decodeCereal
     :: C.Serialize (v SomeData)
     => ByteString
     -> Maybe (v SomeData)
 decodeCereal = either (const Nothing) Just . C.decode
+{-# INLINE decodeCereal #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- low level big-endian (non-host order), using bytestring-builder
+encodeSimpleBE :: V.Vector v SomeData => v SomeData -> ByteString
+encodeSimpleBE v = L.toStrict
+         $ Builder.toLazyByteString
+         $ Builder.int64BE (fromIntegral $ V.length v)
+        <> V.foldr (\sd b -> go sd <> b) mempty v
+  where
+    go (SomeData x y z)
+        = Builder.int64BE x
+       <> Builder.word8 y
+       <> Builder.doubleBE z
+    {-# INLINE go #-}
+{-# INLINE encodeSimpleBE #-}
 
 decodeSimpleBE
     :: V.Vector v SomeData
@@ -174,19 +153,24 @@ decodeSimpleBE bs0 = runST $
         | otherwise = f
             (SU.unsafeDrop 8 bs)
             (fromIntegral $ word64be bs :: Int64)
+    {-# INLINE readInt64 #-}
 
     readWord8 bs f
         | S.length bs < 1 = return Nothing
         | otherwise = f
             (SU.unsafeDrop 1 bs)
             (bs `SU.unsafeIndex` 0)
+    {-# INLINE readWord8 #-}
 
-    -- probably not safe enough
     readDouble bs f
         | S.length bs < 8 = return Nothing
         | otherwise = f
             (SU.unsafeDrop 8 bs)
+            -- probably not safe enough for production, but works for basic
+            -- benchmarking here
             (unsafeCoerce $ word64be bs :: Double)
+    {-# INLINE readDouble #-}
+{-# INLINE decodeSimpleBE #-}
 
 word64be :: ByteString -> Word64
 word64be = \s ->
@@ -199,6 +183,22 @@ word64be = \s ->
               (fromIntegral (s `SU.unsafeIndex` 6) `shiftL`  8) .|.
               (fromIntegral (s `SU.unsafeIndex` 7) )
 {-# INLINE word64be #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- low level little-endian (host order), using bytestring-builder
+encodeSimpleLE :: V.Vector v SomeData => v SomeData -> ByteString
+encodeSimpleLE v = L.toStrict
+         $ Builder.toLazyByteString
+         $ Builder.int64LE (fromIntegral $ V.length v)
+        <> V.foldr (\sd b -> go sd <> b) mempty v
+  where
+    go (SomeData x y z)
+        = Builder.int64LE x
+       <> Builder.word8 y
+       <> Builder.doubleLE z
+    {-# INLINE go #-}
+{-# INLINE encodeSimpleLE #-}
 
 decodeSimpleLE
     :: V.Vector v SomeData
@@ -230,12 +230,14 @@ decodeSimpleLE bs0 = runST $
         | otherwise = f
             (SU.unsafeDrop 1 bs)
             (bs `SU.unsafeIndex` 0)
+    {-# INLINE readWord8 #-}
 
     readDouble bs f
         | S.length bs < 8 = return Nothing
         | otherwise = f
             (SU.unsafeDrop 8 bs)
             (doublele bs)
+    {-# INLINE readDouble #-}
 {-# INLINE decodeSimpleLE #-}
 
 word64le :: ByteString -> Word64
@@ -257,9 +259,15 @@ word64le (PS x s _) =
 doublele :: ByteString -> Double
 doublele (PS x s _) =
     accursedUnutterablePerformIO $ withForeignPtr x $ \p -> peekByteOff p s
+{-# INLINE doublele #-}
+-------------------------------------------------------------------
 
-type Total = Int
-type Offset = Int
+-- Some helper types used for both Peek and PeekEx
+type Total = Int -- total byte size of the given Ptr
+type Offset = Int -- how far into the given Ptr to look
+
+-------------------------------------------------------------------
+-- continuation-based Peek implementation
 newtype Peek s a = Peek
     { runPeek :: forall r byte.
         Total
@@ -271,50 +279,72 @@ newtype Peek s a = Peek
     deriving Functor
 instance Applicative (Peek s) where
     pure x = Peek (\_ _ offset k -> k offset x)
+    {-# INLINE pure #-}
     Peek f <*> Peek g = Peek $ \total ptr offset1 k ->
         f total ptr offset1 $ \offset2 f' ->
         g total ptr offset2 $ \offset3 g' ->
         k offset3 (f' g')
+    {-# INLINE (<*>) #-}
     Peek f *> Peek g = Peek $ \total ptr offset1 k ->
         f total ptr offset1 $ \offset2 _ ->
         g total ptr offset2 k
+    {-# INLINE (*>) #-}
 instance Monad (Peek s) where
     return = pure
+    {-# INLINE return #-}
     (>>) = (*>)
+    {-# INLINE (>>) #-}
     Peek x >>= f = Peek $ \total ptr offset1 k ->
         x total ptr offset1 $ \offset2 x' ->
         runPeek (f x') total ptr offset2 k
+    {-# INLINE (>>=) #-}
     fail = Fail.fail
+    {-# INLINE fail #-}
 instance Fail.MonadFail (Peek s) where
     fail _ = Peek $ \_ _ _ _ -> pure Nothing
+    {-# INLINE fail #-}
 instance PrimMonad (Peek s) where
     type PrimState (Peek s) = s
     primitive action = Peek $ \_ _ offset k -> do
         x <- primitive (unsafeCoerce# action)
         k offset x
+    {-# INLINE primitive #-}
 
-decodeSimpleClass :: Simple a
-            => ByteString
-            -> Maybe a
-decodeSimpleClass (PS x s len) =
-    accursedUnutterablePerformIO $ withForeignPtr x $ \p ->
-        let total = len + s
-            final offset y
-                | offset == total = return (Just y)
-                | otherwise = return Nothing
-         in runPeek simplePeek (len + s) p s final
+-- | A @Peek@ implementation based on an instance of @Storable@
+storablePeek :: forall s a. Storable a => Peek s a
+storablePeek = Peek $ \total ptr offset k ->
+    let offset' = offset + needed
+        needed = sizeOf (undefined :: a)
+     in if total >= offset'
+            then do
+                x <- peekByteOff ptr offset
+                k offset' x
+            else return Nothing
+{-# INLINE storablePeek #-}
+-------------------------------------------------------------------
 
+-------------------------------------------------------------------
+-- ref/exception-based Peek implementation
+
+-- | A more efficient @IORef Int@
 newtype OffsetRef = OffsetRef
     (Data.Vector.Unboxed.Mutable.MVector RealWorld Offset)
 
 newOffsetRef :: Int -> IO OffsetRef
 newOffsetRef x = OffsetRef <$> MV.replicate 1 x
+{-# INLINE newOffsetRef #-}
 
 readOffsetRef :: OffsetRef -> IO Int
 readOffsetRef (OffsetRef mv) = MV.unsafeRead mv 0
+{-# INLINE readOffsetRef #-}
 
 writeOffsetRef :: OffsetRef -> Int -> IO ()
 writeOffsetRef (OffsetRef mv) x = MV.unsafeWrite mv 0 x
+{-# INLINE writeOffsetRef #-}
+
+data PeekException = PeekException
+    deriving (Show, Typeable)
+instance Exception PeekException
 
 newtype PeekEx s a = PeekEx
     { runPeekEx :: forall byte.
@@ -326,54 +356,35 @@ newtype PeekEx s a = PeekEx
     deriving Functor
 instance Applicative (PeekEx s) where
     pure x = PeekEx (\_ _ _ -> pure x)
+    {-# INLINE pure #-}
     PeekEx f <*> PeekEx g = PeekEx $ \total ptr ref ->
         f total ptr ref <*> g total ptr ref
+    {-# INLINE (<*>) #-}
     PeekEx f *> PeekEx g = PeekEx $ \total ptr ref ->
         f total ptr ref *>
         g total ptr ref
+    {-# INLINE (*>) #-}
 instance Monad (PeekEx s) where
     return = pure
+    {-# INLINE return #-}
     (>>) = (*>)
+    {-# INLINE (>>) #-}
     PeekEx x >>= f = PeekEx $ \total ptr ref -> do
         x' <- x total ptr ref
         runPeekEx (f x') total ptr ref
+    {-# INLINE (>>=) #-}
     fail = Fail.fail
+    {-# INLINE fail #-}
 instance Fail.MonadFail (PeekEx s) where
-    fail _ = PeekEx $ \_ _ _ -> throwIO NotEnoughBytes
+    fail _ = PeekEx $ \_ _ _ -> throwIO PeekException
+    {-# INLINE fail #-}
 instance PrimMonad (PeekEx s) where
     type PrimState (PeekEx s) = s
     primitive action = PeekEx $ \_ _ _ ->
         primitive (unsafeCoerce# action)
+    {-# INLINE primitive #-}
 
-decodeSimpleClassEx :: Simple a
-              => ByteString
-              -> Maybe a
-decodeSimpleClassEx (PS x s len) =
-    accursedUnutterablePerformIO $ withForeignPtr x $ \p -> do
-        let total = len + s
-        offsetRef <- newOffsetRef s
-        let runner = do
-                y <- runPeekEx simplePeekEx (len + s) p offsetRef
-                offset <- readOffsetRef offsetRef
-                return $ if offset == total
-                    then Just y
-                    else Nothing
-        runner `catch` \NotEnoughBytes -> return Nothing
-
-data NotEnoughBytes = NotEnoughBytes
-    deriving (Show, Typeable)
-instance Exception NotEnoughBytes
-
-storablePeek :: forall s a. Storable a => Peek s a
-storablePeek = Peek $ \total ptr offset k ->
-    let offset' = offset + needed
-        needed = sizeOf (undefined :: a)
-     in if total >= offset'
-            then do
-                x <- peekByteOff ptr offset
-                k offset' x
-            else return Nothing
-
+-- | A @PeekEx@ implementation based on an instance of @Storable@
 storablePeekEx :: forall s a. Storable a => PeekEx s a
 storablePeekEx = PeekEx $ \total ptr offsetRef -> do
     offset <- readOffsetRef offsetRef
@@ -383,28 +394,36 @@ storablePeekEx = PeekEx $ \total ptr offsetRef -> do
         then do
             writeOffsetRef offsetRef offset'
             peekByteOff ptr offset
-        else throwIO NotEnoughBytes
+        else fail "not enough bytes"
+{-# INLINE storablePeekEx #-}
+-------------------------------------------------------------------
 
+-------------------------------------------------------------------
+
+-- | A Simple serialization typeclass. Includes both @Peek@ and @PeekEx@
+-- implementations, though in a real library we would just choose the faster
+-- implementation.
 class Simple a where
     simpleSize :: Either Int (a -> Int)
+    default simpleSize :: Storable a => Either Int (a -> Int)
+    simpleSize = Left (sizeOf (undefined :: a))
+
     simplePoke :: Ptr byte -> Int -> a -> IO ()
+    default simplePoke :: Storable a => Ptr byte -> Int -> a -> IO ()
+    simplePoke = pokeByteOff
+
     simplePeek :: Peek s a
+    default simplePeek :: Storable a => Peek s a
+    simplePeek = storablePeek
+
     simplePeekEx :: PeekEx s a
-instance Simple Int64 where
-    simpleSize = Left 8
-    simplePoke = pokeByteOff
-    simplePeek = storablePeek
+    default simplePeekEx :: Storable a => PeekEx s a
     simplePeekEx = storablePeekEx
-instance Simple Word8 where
-    simpleSize = Left 1
-    simplePoke = pokeByteOff
-    simplePeek = storablePeek
-    simplePeekEx = storablePeekEx
-instance Simple Double where
-    simpleSize = Left 8
-    simplePoke = pokeByteOff
-    simplePeek = storablePeek
-    simplePeekEx = storablePeekEx
+
+instance Simple Int64
+instance Simple Word8
+instance Simple Double
+
 instance Simple SomeData where
     simpleSize = Left 17
     simplePoke p s (SomeData x y z) = do
@@ -419,6 +438,11 @@ instance Simple SomeData where
         <$> simplePeekEx
         <*> simplePeekEx
         <*> simplePeekEx
+    {-# INLINE simpleSize #-}
+    {-# INLINE simplePoke #-}
+    {-# INLINE simplePeek #-}
+    {-# INLINE simplePeekEx #-}
+
 instance Simple a => Simple (Data.Vector.Vector a) where
     simpleSize = Right $ \v ->
         case simpleSize of
@@ -459,6 +483,46 @@ instance Simple a => Simple (Data.Vector.Vector a) where
                     MV.unsafeWrite mv i x
                     loop $! i + 1
         loop 0
+    {-# INLINE simpleSize #-}
+    {-# INLINE simplePoke #-}
+    {-# INLINE simplePeek #-}
+    {-# INLINE simplePeekEx #-}
 
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- Encode/decode functions based on the Simple class
+
+-- | Allocates exactly the amount of storage space necessary
 encodeSimpleClass :: Simple a => a -> ByteString
-encodeSimpleClass x = unsafeCreate (either id ($ x) simpleSize) (\p -> simplePoke p 0 x)
+encodeSimpleClass x = unsafeCreate
+    (either id ($ x) simpleSize)
+    (\p -> simplePoke p 0 x)
+{-# INLINE encodeSimpleClass #-}
+
+-- | Decode using the @Peek@ continuation-passing approach
+decodeSimpleClass :: Simple a => ByteString -> Maybe a
+decodeSimpleClass (PS x s len) =
+    accursedUnutterablePerformIO $ withForeignPtr x $ \p ->
+        let total = len + s
+            final offset y
+                | offset == total = return (Just y)
+                | otherwise = return Nothing
+         in runPeek simplePeek (len + s) p s final
+{-# INLINE decodeSimpleClass #-}
+
+-- | Decode using the @PeekEx@ ref/exception approach
+decodeSimpleClassEx :: Simple a => ByteString -> Maybe a
+decodeSimpleClassEx (PS x s len) =
+    accursedUnutterablePerformIO $ withForeignPtr x $ \p -> do
+        let total = len + s
+        offsetRef <- newOffsetRef s
+        let runner = do
+                y <- runPeekEx simplePeekEx (len + s) p offsetRef
+                offset <- readOffsetRef offsetRef
+                return $ if offset == total
+                    then Just y
+                    else Nothing
+        runner `catch` \PeekException -> return Nothing
+{-# INLINE decodeSimpleClassEx #-}
+-------------------------------------------------------------------
