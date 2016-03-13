@@ -66,6 +66,7 @@ codecs =
     [ Codec
         [ ("encodeSimpleRaw", encodeSimpleRaw)
         , ("encodeSimplePoke", encodeSimplePoke)
+        , ("encodeSimplePokeMonad", encodeSimplePokeMonad)
         , ("encodeSimplePokeRef", encodeSimplePokeRef)
         , ("encodeBuilderLE", encodeBuilderLE)
         ]
@@ -423,6 +424,46 @@ storablePoke x = Poke $ \ptr offset k -> do
 -------------------------------------------------------------------
 
 -------------------------------------------------------------------
+-- Continuation-based monadic Poke implementation
+newtype PokeMonad a = PokeMonad
+    { runPokeMonad :: forall byte r.
+        Ptr byte
+     -> Offset
+     -> (Offset -> a -> IO r)
+     -> IO r
+    }
+    deriving Functor
+instance Applicative PokeMonad where
+    pure x = PokeMonad $ \_ offset k -> k offset x
+    {-# INLINE pure #-}
+    PokeMonad f <*> PokeMonad g = PokeMonad $ \ptr offset1 k ->
+        f ptr offset1 $ \offset2 f' ->
+        g ptr offset2 $ \offset3 g' ->
+        k offset3 (f' g')
+    {-# INLINE (<*>) #-}
+    PokeMonad f *> PokeMonad g = PokeMonad $ \ptr offset1 k ->
+        f ptr offset1 $ \offset2 _ ->
+        g ptr offset2 $ \offset3 g' ->
+        k offset3 g'
+    {-# INLINE (*>) #-}
+instance Monad PokeMonad where
+    return = pure
+    {-# INLINE return #-}
+    (>>) = (*>)
+    {-# INLINE (>>) #-}
+    PokeMonad x >>= f = PokeMonad $ \ptr offset1 k ->
+        x ptr offset1 $ \offset2 x' ->
+        runPokeMonad (f x') ptr offset2 k
+    {-# INLINE (>>=) #-}
+
+storablePokeMonad :: Storable a => a -> PokeMonad ()
+storablePokeMonad x = PokeMonad $ \ptr offset k -> do
+    y <- pokeByteOff ptr offset x
+    (k $! offset + sizeOf x) y
+{-# INLINE storablePokeMonad #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
 -- Reference-based Poke implementation
 newtype PokeRef = PokeRef
     { runPokeRef :: forall byte.
@@ -455,15 +496,22 @@ class Simple a where
     simpleSize :: Either Int (a -> Int)
     default simpleSize :: Storable a => Either Int (a -> Int)
     simpleSize = Left (sizeOf (undefined :: a))
+    {-# INLINE simpleSize #-}
 
     simpleRawPoke :: Ptr byte -> Int -> a -> IO ()
     default simpleRawPoke :: Storable a => Ptr byte -> Int -> a -> IO ()
     simpleRawPoke = pokeByteOff
+    {-# INLINE simpleRawPoke #-}
 
     simplePoke :: a -> Poke
     default simplePoke :: Storable a => a -> Poke
     simplePoke = storablePoke
     {-# INLINE simplePoke #-}
+
+    simplePokeMonad :: a -> PokeMonad ()
+    default simplePokeMonad :: Storable a => a -> PokeMonad ()
+    simplePokeMonad = storablePokeMonad
+    {-# INLINE simplePokeMonad #-}
 
     simplePokeRef :: a -> PokeRef
     default simplePokeRef :: Storable a => a -> PokeRef
@@ -473,10 +521,12 @@ class Simple a where
     simplePeek :: Peek s a
     default simplePeek :: Storable a => Peek s a
     simplePeek = storablePeek
+    {-# INLINE simplePeek #-}
 
     simplePeekEx :: PeekEx s a
     default simplePeekEx :: Storable a => PeekEx s a
     simplePeekEx = storablePeekEx
+    {-# INLINE simplePeekEx #-}
 
 instance Simple Int64
 instance Simple Word8
@@ -492,6 +542,10 @@ instance Simple SomeData where
         simplePoke x <>
         simplePoke y <>
         simplePoke z
+    simplePokeMonad (SomeData x y z) = do
+        simplePokeMonad x
+        simplePokeMonad y
+        simplePokeMonad z
     simplePokeRef (SomeData x y z) =
         simplePokeRef x <>
         simplePokeRef y <>
@@ -507,6 +561,7 @@ instance Simple SomeData where
     {-# INLINE simpleSize #-}
     {-# INLINE simpleRawPoke #-}
     {-# INLINE simplePoke #-}
+    {-# INLINE simplePokeMonad #-}
     {-# INLINE simplePokeRef #-}
     {-# INLINE simplePeek #-}
     {-# INLINE simplePeekEx #-}
@@ -532,6 +587,9 @@ instance Simple a => Simple (Data.Vector.Vector a) where
     simplePoke v =
         simplePoke (fromIntegral (V.length v) :: Int64) <>
         foldMap simplePoke v
+    simplePokeMonad v = do
+        simplePokeMonad (fromIntegral (V.length v) :: Int64)
+        V.mapM_ simplePokeMonad v
     simplePokeRef v =
         simplePokeRef (fromIntegral (V.length v) :: Int64) <>
         foldMap simplePokeRef v
@@ -560,6 +618,7 @@ instance Simple a => Simple (Data.Vector.Vector a) where
     {-# INLINE simpleSize #-}
     {-# INLINE simpleRawPoke #-}
     {-# INLINE simplePoke #-}
+    {-# INLINE simplePokeMonad #-}
     {-# INLINE simplePokeRef #-}
     {-# INLINE simplePeek #-}
     {-# INLINE simplePeekEx #-}
@@ -581,6 +640,12 @@ encodeSimplePoke x = unsafeCreate
     (either id ($ x) simpleSize)
     (\p -> runPoke (simplePoke x) p 0 (\_off -> return ()))
 {-# INLINE encodeSimplePoke #-}
+
+encodeSimplePokeMonad :: Simple a => a -> ByteString
+encodeSimplePokeMonad x = unsafeCreate
+    (either id ($ x) simpleSize)
+    (\p -> runPokeMonad (simplePokeMonad x) p 0 (\_ _ -> return ()))
+{-# INLINE encodeSimplePokeMonad #-}
 
 encodeSimplePokeRef :: Simple a => a -> ByteString
 encodeSimplePokeRef x = unsafeCreate
