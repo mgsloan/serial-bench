@@ -2,67 +2,112 @@
 
 [![Build Status](https://travis-ci.org/fpco/serial-bench.svg?branch=master)](https://travis-ci.org/fpco/serial-bench)
 
-Ridiculously oversimplified serialization benchmark.
+Blog post pending explaining this. In the meanwhile,
+[benchmarks](https://s3.amazonaws.com/download.fpcomplete.com/michael/serial-bench-2016-03-13.html)!
 
 ```
-serial-bench-0.1.0.0: benchmarks
-Running 1 benchmarks...
-Benchmark serial-bench-bench: RUNNING...
-benchmarking encode/encode
-time                 6.346 μs   (6.321 μs .. 6.366 μs)
+benchmarking encode/encodeSimpleRaw
+time                 516.9 ns   (514.3 ns .. 519.4 ns)
                      1.000 R²   (1.000 R² .. 1.000 R²)
-mean                 6.307 μs   (6.268 μs .. 6.344 μs)
-std dev              133.2 ns   (102.4 ns .. 209.3 ns)
+mean                 517.5 ns   (514.3 ns .. 524.0 ns)
+std dev              14.99 ns   (8.780 ns .. 27.52 ns)
+variance introduced by outliers: 41% (moderately inflated)
+
+benchmarking encode/encodeSimplePoke
+time                 511.9 ns   (509.7 ns .. 514.0 ns)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 512.2 ns   (509.6 ns .. 515.6 ns)
+std dev              9.718 ns   (7.981 ns .. 14.68 ns)
+variance introduced by outliers: 23% (moderately inflated)
+
+benchmarking encode/encodeSimplePokeMonad
+time                 549.9 ns   (534.2 ns .. 567.7 ns)
+                     0.993 R²   (0.986 R² .. 0.998 R²)
+mean                 539.5 ns   (530.3 ns .. 555.0 ns)
+std dev              41.45 ns   (25.22 ns .. 67.95 ns)
+variance introduced by outliers: 84% (severely inflated)
+
+benchmarking encode/encodeSimplePokeRef
+time                 798.9 ns   (795.1 ns .. 802.3 ns)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 804.5 ns   (799.7 ns .. 811.5 ns)
+std dev              19.62 ns   (14.37 ns .. 28.68 ns)
+variance introduced by outliers: 32% (moderately inflated)
+
+benchmarking encode/encodeSimplePokeRefMonad
+time                 815.9 ns   (810.5 ns .. 822.1 ns)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 814.7 ns   (809.7 ns .. 820.3 ns)
+std dev              17.07 ns   (13.93 ns .. 20.71 ns)
+variance introduced by outliers: 26% (moderately inflated)
+
+benchmarking encode/encodeBuilderLE
+time                 3.079 μs   (3.064 μs .. 3.093 μs)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 3.092 μs   (3.073 μs .. 3.117 μs)
+std dev              73.09 ns   (55.90 ns .. 98.13 ns)
+variance introduced by outliers: 27% (moderately inflated)
+
+benchmarking encode/encodeBuilderBE
+time                 3.596 μs   (3.556 μs .. 3.646 μs)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 3.573 μs   (3.553 μs .. 3.597 μs)
+std dev              76.89 ns   (61.84 ns .. 106.8 ns)
+variance introduced by outliers: 24% (moderately inflated)
+
+benchmarking encode/encodeCereal
+time                 17.82 μs   (17.69 μs .. 17.94 μs)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 17.80 μs   (17.66 μs .. 17.99 μs)
+std dev              514.9 ns   (423.8 ns .. 695.0 ns)
+variance introduced by outliers: 32% (moderately inflated)
+
+benchmarking encode/binary
+time                 69.49 μs   (68.92 μs .. 70.27 μs)
+                     0.999 R²   (0.999 R² .. 1.000 R²)
+mean                 69.88 μs   (69.38 μs .. 70.40 μs)
+std dev              1.730 μs   (1.371 μs .. 2.151 μs)
 variance introduced by outliers: 22% (moderately inflated)
 
-benchmarking encode/simpleEncode
-time                 4.035 μs   (3.823 μs .. 4.283 μs)
-                     0.987 R²   (0.981 R² .. 0.997 R²)
-mean                 3.928 μs   (3.843 μs .. 4.041 μs)
-std dev              325.1 ns   (242.9 ns .. 430.2 ns)
-variance introduced by outliers: 83% (severely inflated)
+benchmarking decode/decodeSimplePeek
+time                 1.036 μs   (1.029 μs .. 1.043 μs)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 1.039 μs   (1.033 μs .. 1.046 μs)
+std dev              23.82 ns   (18.78 ns .. 31.98 ns)
+variance introduced by outliers: 29% (moderately inflated)
+
+benchmarking decode/decodeSimplePeekEx
+time                 1.710 μs   (1.699 μs .. 1.720 μs)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 1.696 μs   (1.685 μs .. 1.707 μs)
+std dev              36.97 ns   (31.98 ns .. 43.32 ns)
+variance introduced by outliers: 26% (moderately inflated)
+
+benchmarking decode/decodeRawLE
+time                 1.787 μs   (1.774 μs .. 1.801 μs)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 1.786 μs   (1.775 μs .. 1.798 μs)
+std dev              38.31 ns   (31.72 ns .. 47.10 ns)
+variance introduced by outliers: 25% (moderately inflated)
+
+benchmarking decode/decodeRawBE
+time                 2.667 μs   (2.652 μs .. 2.685 μs)
+                     1.000 R²   (1.000 R² .. 1.000 R²)
+mean                 2.675 μs   (2.661 μs .. 2.694 μs)
+std dev              54.38 ns   (41.63 ns .. 83.72 ns)
+variance introduced by outliers: 22% (moderately inflated)
+
+benchmarking decode/decodeCereal
+time                 9.228 μs   (9.185 μs .. 9.275 μs)
+                     1.000 R²   (0.999 R² .. 1.000 R²)
+mean                 9.264 μs   (9.189 μs .. 9.351 μs)
+std dev              283.5 ns   (220.9 ns .. 373.7 ns)
+variance introduced by outliers: 37% (moderately inflated)
 
 benchmarking decode/binary
-time                 12.00 μs   (11.87 μs .. 12.16 μs)
-                     0.999 R²   (0.998 R² .. 1.000 R²)
-mean                 11.85 μs   (11.79 μs .. 11.96 μs)
-std dev              258.6 ns   (154.9 ns .. 469.3 ns)
-variance introduced by outliers: 22% (moderately inflated)
-
-benchmarking decode/cereal
-time                 12.88 μs   (11.20 μs .. 14.80 μs)
-                     0.868 R²   (0.783 R² .. 0.944 R²)
-mean                 15.74 μs   (14.17 μs .. 18.71 μs)
-std dev              7.091 μs   (5.133 μs .. 11.13 μs)
-variance introduced by outliers: 99% (severely inflated)
-
-benchmarking decode/simple
-time                 7.195 μs   (6.721 μs .. 7.862 μs)
-                     0.933 R²   (0.890 R² .. 0.975 R²)
-mean                 8.683 μs   (7.749 μs .. 12.02 μs)
-std dev              4.467 μs   (1.638 μs .. 9.269 μs)
-variance introduced by outliers: 99% (severely inflated)
-
-benchmarking decode/simpleLE
-time                 4.962 μs   (4.848 μs .. 5.125 μs)
-                     0.997 R²   (0.994 R² .. 1.000 R²)
-mean                 4.911 μs   (4.879 μs .. 4.970 μs)
-std dev              156.7 ns   (96.56 ns .. 277.3 ns)
-variance introduced by outliers: 40% (moderately inflated)
-
-benchmarking decode/simpleClass
-time                 5.702 μs   (5.404 μs .. 6.196 μs)
-                     0.942 R²   (0.893 R² .. 0.977 R²)
-mean                 8.254 μs   (6.524 μs .. 13.96 μs)
-std dev              8.799 μs   (4.262 μs .. 16.99 μs)
-variance introduced by outliers: 99% (severely inflated)
-
-benchmarking decode/simpleClassEx
-time                 2.740 μs   (2.619 μs .. 2.878 μs)
-                     0.990 R²   (0.983 R² .. 0.997 R²)
-mean                 2.732 μs   (2.683 μs .. 2.825 μs)
-std dev              224.4 ns   (154.6 ns .. 344.8 ns)
-variance introduced by outliers: 83% (severely inflated)
-
-Benchmark serial-bench-bench: FINISH
+time                 71.68 μs   (70.66 μs .. 73.40 μs)
+                     0.997 R²   (0.991 R² .. 1.000 R²)
+mean                 70.93 μs   (70.30 μs .. 72.39 μs)
+std dev              3.175 μs   (1.665 μs .. 5.724 μs)
+variance introduced by outliers: 48% (moderately inflated)
 ```
