@@ -162,7 +162,11 @@ decodeCereal = either (const Nothing) Just . C.decode
 
 -------------------------------------------------------------------
 -- cereal package
-instance CBOR.Serialise SomeData
+instance CBOR.Serialise SomeData where
+   decode = SomeData <$> CBOR.decode <*> CBOR.decode <*> CBOR.decode
+   {-# INLINE decode #-}
+   encode (SomeData a b c) = CBOR.encode a <> CBOR.encode b <> CBOR.encode c
+   {-# INLINE encode #-}
 -------------------------------------------------------------------
 
 -------------------------------------------------------------------
