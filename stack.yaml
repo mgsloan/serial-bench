@@ -7,11 +7,17 @@ resolver: lts-5.6
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
+- location:
+    git: git@github.com:well-typed/binary-serialise-cbor.git
+    commit: 8f60b0c9cc835a32fbd036ae2c67d35c28496a88
+  extra-dep: true
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps: []
 
 # Override default flag values for local packages and extra-deps
-flags: {}
+flags:
+  binary-serialise-cbor:
+    newtime15: true
 
 # Extra package databases containing global packages
 extra-package-dbs: []

@@ -44,6 +44,7 @@ import qualified Data.Vector.Unboxed.Mutable
 import qualified Control.Monad.Fail as Fail
 import Unsafe.Coerce (unsafeCoerce)
 import GHC.Generics (Generic)
+import qualified Data.Binary.Serialise.CBOR as CBOR
 
 -------------------------------------------------------------------
 -- The datatype we're going to be experimenting with
@@ -83,6 +84,7 @@ codecs =
         , ("decodeCereal", decodeCereal)
         ]
     , simpleCodec "binary" B.encode decodeBinary
+    , simpleCodec "cbor" CBOR.serialise (Just . CBOR.deserialise)
     ]
   where
     simpleCodec name enc dec = Codec [(name, enc)] [(name, dec)]
@@ -116,6 +118,11 @@ decodeCereal
     -> Maybe (v SomeData)
 decodeCereal = either (const Nothing) Just . C.decode
 {-# INLINE decodeCereal #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- cereal package
+instance CBOR.Serialise SomeData
 -------------------------------------------------------------------
 
 -------------------------------------------------------------------

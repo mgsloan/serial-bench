@@ -26,6 +26,7 @@ library
                      , deepseq
                      , primitive
                      , fail
+                     , binary-serialise-cbor
   default-language:    Haskell2010
   ghc-options:         -O2
 
