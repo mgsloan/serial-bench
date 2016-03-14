@@ -27,6 +27,7 @@ library
                      , primitive
                      , fail
                      , binary-serialise-cbor
+                     , packer
   default-language:    Haskell2010
   ghc-options:         -O2
 

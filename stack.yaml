@@ -12,7 +12,8 @@ packages:
     commit: 8f60b0c9cc835a32fbd036ae2c67d35c28496a88
   extra-dep: true
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
-extra-deps: []
+extra-deps:
+- packer-0.1.9
 
 # Override default flag values for local packages and extra-deps
 flags:

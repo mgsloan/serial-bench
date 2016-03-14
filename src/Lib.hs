@@ -8,6 +8,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE BangPatterns #-}
 module Lib
     ( SomeData (..)
     , Codec (..)
@@ -45,6 +46,8 @@ import qualified Control.Monad.Fail as Fail
 import Unsafe.Coerce (unsafeCoerce)
 import GHC.Generics (Generic)
 import qualified Data.Binary.Serialise.CBOR as CBOR
+import qualified Data.Packer as P
+import System.IO.Unsafe (unsafePerformIO)
 
 -------------------------------------------------------------------
 -- The datatype we're going to be experimenting with
@@ -65,14 +68,16 @@ data Codec where
 codecs :: [Codec]
 codecs =
     [ Codec
-        [ ("encodeSimpleRaw", encodeSimpleRaw)
+        [ ("encodePacker", encodePacker)
+        , ("encodeSimpleRaw", encodeSimpleRaw)
         , ("encodeSimplePoke", encodeSimplePoke)
         , ("encodeSimplePokeMonad", encodeSimplePokeMonad)
         , ("encodeSimplePokeRef", encodeSimplePokeRef)
         , ("encodeSimplePokeRefMonad", encodeSimplePokeRefMonad)
         , ("encodeBuilderLE", encodeBuilderLE)
         ]
-        [ ("decodeSimplePeek", decodeSimplePeek)
+        [ ("decodePacker", decodePacker)
+        , ("decodeSimplePeek", decodeSimplePeek)
         , ("decodeSimplePeekEx", decodeSimplePeekEx)
         , ("decodeRawLE", decodeRawLE)
         ]
@@ -89,6 +94,41 @@ codecs =
   where
     simpleCodec name enc dec = Codec [(name, enc)] [(name, dec)]
 -------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- packer package
+encodePacker :: (Simple (v SomeData), V.Vector v SomeData)
+             => v SomeData
+             -> ByteString
+encodePacker v = P.runPacking (either id ($ v) simpleSize) $ do
+    P.putStorable (fromIntegral $ V.length v :: Int64)
+    V.forM_ v $ \(SomeData x y z) -> do
+        P.putStorable x
+        P.putStorable y
+        P.putStorable z
+{-# INLINE encodePacker #-}
+
+decodePacker :: V.Vector v SomeData => ByteString -> Maybe (v SomeData)
+decodePacker =
+    either (const Nothing) Just . P.tryUnpacking go
+  where
+    go = do
+        len :: Int64 <- P.getStorable
+        let len' = fromIntegral len
+        mv <- return $ unsafePerformIO $ MV.new len'
+        let loop i
+                | i >= len' = return $ unsafePerformIO $ V.unsafeFreeze mv
+                | otherwise = do
+                    x <- SomeData
+                        <$> P.getStorable
+                        <*> P.getStorable
+                        <*> P.getStorable
+                    !() <- return $ unsafePerformIO $ MV.unsafeWrite mv i x
+                    loop $! i + 1
+        loop 0
+{-# INLINE decodePacker #-}
+-------------------------------------------------------------------
+
 
 -------------------------------------------------------------------
 -- binary package
