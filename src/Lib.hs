@@ -9,6 +9,7 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE PackageImports #-}
 module Lib
     ( SomeData (..)
     , Codec (..)
@@ -17,7 +18,8 @@ module Lib
 
 import Data.Int
 import Data.Word
-import qualified Data.Binary as B
+import qualified "binary" Data.Binary as B
+import qualified "binary-old" Data.Binary as BO
 import qualified Data.Serialize as C
 import qualified Data.Vector.Generic as V
 import qualified Data.Vector.Generic.Mutable as MV
@@ -89,6 +91,7 @@ codecs =
         , ("decodeCereal", decodeCereal)
         ]
     , simpleCodec "binary" B.encode decodeBinary
+    , simpleCodec "old-binary" BO.encode decodeOldBinary
     , simpleCodec "cbor" CBOR.serialise (Just . CBOR.deserialise)
     ]
   where
@@ -146,6 +149,38 @@ decodeBinary = either
                     else Nothing)
        . B.decodeOrFail
 {-# INLINE decodeBinary #-}
+-------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- old binary package
+instance BO.Binary SomeData where
+    put (SomeData x y z) = do
+        BO.put x
+        BO.put y
+        BO.put z
+    {-# INLINE put #-}
+    get = SomeData <$> BO.get <*> BO.get <*> BO.get
+    {-# INLINE get #-}
+instance BO.Binary a => BO.Binary (Data.Vector.Vector a) where
+    put v = do
+        BO.put (V.length v)
+        V.mapM_ BO.put v
+    {-# INLINE put #-}
+    get = do
+        len <- BO.get
+        mv <- return $ unsafePerformIO $ MV.new len
+        let loop i
+                | i >= len = return $ unsafePerformIO $ V.unsafeFreeze mv
+                | otherwise = do
+                    x <- BO.get
+                    !() <- return $ unsafePerformIO $ MV.unsafeWrite mv i x
+                    loop $! i + 1
+        loop 0
+    {-# INLINE get #-}
+
+decodeOldBinary :: L.ByteString -> Maybe (Data.Vector.Vector SomeData)
+decodeOldBinary = Just . BO.decode
+{-# INLINE decodeOldBinary #-}
 -------------------------------------------------------------------
 
 -------------------------------------------------------------------
