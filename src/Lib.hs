@@ -1,55 +1,62 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE MagicHash #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE MagicHash #-}
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
 module Lib
     ( SomeData (..)
     , Codec (..)
     , codecs
     ) where
 
-import Data.Int
-import Data.Word
-import qualified "binary" Data.Binary as B
+import                        Control.DeepSeq
+import                        Control.Exception (Exception, catch, throwIO)
+import qualified              Control.Monad.Fail as Fail
+import                        Control.Monad.Primitive (PrimMonad (..))
+import                        Control.Monad.ST
+import qualified "binary"     Data.Binary as B
 import qualified "binary-old" Data.Binary as BO
-import qualified Data.Serialize as C
-import qualified Data.Vector.Generic as V
-import qualified Data.Vector.Generic.Mutable as MV
-import Data.ByteString (ByteString)
-import qualified Data.ByteString.Lazy.Builder as Builder
-import qualified Data.ByteString as S
-import qualified Data.ByteString.Lazy as L
-import Data.Monoid ((<>))
-import Data.Vector.Binary ()
-import Data.Vector.Serialize ()
-import Control.Monad.ST
-import Control.DeepSeq
-import qualified Data.ByteString.Unsafe as SU
-import Data.Bits ((.|.), shiftL)
-import Data.ByteString.Internal (ByteString (PS), accursedUnutterablePerformIO, unsafeCreate)
-import Foreign.ForeignPtr (withForeignPtr)
-import Foreign.Storable (peekByteOff, pokeByteOff, Storable, sizeOf)
-import Foreign.Ptr (Ptr)
-import qualified Data.Vector
-import Control.Monad.Primitive (PrimMonad (..))
-import GHC.Base   ( unsafeCoerce# )
-import Control.Exception (Exception, catch, throwIO)
-import Data.Typeable (Typeable)
-import qualified Data.Vector.Unboxed.Mutable
-import qualified Control.Monad.Fail as Fail
-import Unsafe.Coerce (unsafeCoerce)
-import GHC.Generics (Generic)
-import qualified Data.Binary.Serialise.CBOR as CBOR
-import qualified Data.Packer as P
-import System.IO.Unsafe (unsafePerformIO)
+import qualified              Data.Binary.Serialise.CBOR as CBOR
+import                        Data.Bits ((.|.), shiftL)
+import                        Data.ByteString (ByteString)
+import qualified              Data.ByteString as S
+import                        Data.ByteString.Internal (ByteString (PS), accursedUnutterablePerformIO, unsafeCreate)
+import qualified              Data.ByteString.Lazy as L
+import qualified              Data.ByteString.Lazy.Builder as Builder
+import qualified              Data.ByteString.Unsafe as SU
+import                        Data.Coerce (coerce)
+import                        Data.Int
+import                        Data.Monoid ((<>))
+import qualified              Data.Packer as P
+import qualified              Data.Serialize as C
+import qualified              Data.Store as S
+import                        Data.Typeable (Typeable)
+import qualified              Data.Vector
+import                        Data.Vector (Vector)
+import                        Data.Vector.Binary ()
+import qualified              Data.Vector.Generic as V
+import qualified              Data.Vector.Generic.Mutable as MV
+import                        Data.Vector.Serialize ()
+import qualified              Data.Vector.Unboxed.Mutable
+import                        Data.Word
+import                        Foreign.ForeignPtr (withForeignPtr)
+import                        Foreign.Ptr (Ptr)
+import                        Foreign.Storable (peekByteOff, pokeByteOff, Storable, sizeOf)
+import                        GHC.Base ( unsafeCoerce# )
+import                        GHC.Generics (Generic)
+import                        System.IO.Unsafe (unsafePerformIO)
+import                        TH.Derive
+import                        Unsafe.Coerce (unsafeCoerce)
 
 -------------------------------------------------------------------
 -- The datatype we're going to be experimenting with
@@ -84,19 +91,29 @@ codecs =
         , ("decodeRawLE", decodeRawLE)
         ]
     , Codec
-        [ ("encodeBuilderBE", encodeBuilderBE)
+        [ ("encodeStore", S.encode)
+        , ("encodeStoreManual", S.encode . (coerce :: Vector SomeData -> Vector (Manual SomeData)))
+        , ("encodeBuilderBE", encodeBuilderBE)
         , ("encodeCereal", C.encode)
         ]
-        [ ("decodeRawBE", decodeRawBE)
+        [ ("decodeStore", decodeStore)
+        , ("decodeStoreManual", (coerce :: Maybe (Vector (Manual SomeData)) -> Maybe (Vector SomeData)) . decodeStore)
         , ("decodeCereal", decodeCereal)
         ]
-    , simpleCodec "binary" B.encode decodeBinary
-    , simpleCodec "old-binary" BO.encode decodeOldBinary
+    -- , simpleCodec "binary" B.encode decodeBinary
+    -- , simpleCodec "old-binary" BO.encode decodeOldBinary
     , simpleCodec "cbor" CBOR.serialise (Just . CBOR.deserialise)
     ]
   where
     simpleCodec name enc dec = Codec [(name, enc)] [(name, dec)]
 -------------------------------------------------------------------
+
+-------------------------------------------------------------------
+-- store package
+
+decodeStore :: S.Store a => ByteString -> Maybe a
+decodeStore = either (\_ -> Nothing) Just . S.decode
+{-# INLINE decodeStore #-}
 
 -------------------------------------------------------------------
 -- packer package
@@ -828,3 +845,20 @@ decodeSimplePeekEx (PS x s len) =
         runner `catch` \PeekException -> return Nothing
 {-# INLINE decodeSimplePeekEx #-}
 -------------------------------------------------------------------
+
+newtype Manual a = Manual a
+
+instance S.Store (Manual SomeData) where
+    size = S.ConstSize (8 + 1 + 8)
+    {-# INLINE size #-}
+    peek = coerce (SomeData <$> S.peek <*> S.peek <*> S.peek)
+    {-# INLINE peek #-}
+    poke (coerce -> (SomeData x y z)) = do
+        S.poke x
+        S.poke y
+        S.poke z
+    {-# INLINE poke #-}
+
+$($(derive [d|
+    instance Deriving (S.Store SomeData)
+    |]))
