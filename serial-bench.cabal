@@ -29,6 +29,8 @@ library
                      , binary-serialise-cbor
                      , packer
                      , binary-old
+                     , store
+                     , th-utilities
   default-language:    Haskell2010
   ghc-options:         -O2
 
