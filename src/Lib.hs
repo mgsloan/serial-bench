@@ -84,21 +84,21 @@ codecs =
         , ("encodeSimplePokeRef", encodeSimplePokeRef)
         , ("encodeSimplePokeRefMonad", encodeSimplePokeRefMonad)
         , ("encodeBuilderLE", encodeBuilderLE)
+        , ("encodeStore", S.encode)
+        , ("encodeStoreManual", S.encode . (coerce :: Vector SomeData -> Vector (Manual SomeData)))
         ]
         [ ("decodePacker", decodePacker)
         , ("decodeSimplePeek", decodeSimplePeek)
         , ("decodeSimplePeekEx", decodeSimplePeekEx)
         , ("decodeRawLE", decodeRawLE)
+        , ("decodeStore", decodeStore)
+        , ("decodeStoreManual", (coerce :: Maybe (Vector (Manual SomeData)) -> Maybe (Vector SomeData)) . decodeStore)
         ]
     , Codec
-        [ ("encodeStore", S.encode)
-        , ("encodeStoreManual", S.encode . (coerce :: Vector SomeData -> Vector (Manual SomeData)))
-        , ("encodeBuilderBE", encodeBuilderBE)
+        [ ("encodeBuilderBE", encodeBuilderBE)
         , ("encodeCereal", C.encode)
         ]
-        [ ("decodeStore", decodeStore)
-        , ("decodeStoreManual", (coerce :: Maybe (Vector (Manual SomeData)) -> Maybe (Vector SomeData)) . decodeStore)
-        , ("decodeCereal", decodeCereal)
+        [ ("decodeCereal", decodeCereal)
         ]
     -- , simpleCodec "binary" B.encode decodeBinary
     -- , simpleCodec "old-binary" BO.encode decodeOldBinary
